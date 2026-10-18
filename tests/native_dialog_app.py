@@ -14,12 +14,21 @@ from tokenmeter.ui.webserver import DashboardServer
 
 def main():
     import logging
+    from tkinter import filedialog
 
     # stderr goes to app.log in the test: without this the log stayed empty and
     # an intermittent failure left no trace on the server side.
     logging.basicConfig(level=logging.DEBUG, stream=sys.stderr,
                         format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
+    # Keep the actual selection in the isolated test log for CI diagnosis.
+    for name in ("asksaveasfilename", "askopenfilename"):
+        original = getattr(filedialog, name)
+        def selected(*args, _original=original, **kwargs):
+            result = _original(*args, **kwargs)
+            logging.info("File dialog selected %r", result)
+            return result
+        setattr(filedialog, name, selected)
     home = Path(sys.argv[1])
     os.environ["TOKENMETER_HOME"] = str(home)
     cfg = Config(proxy_enabled=False, transcripts_enabled=False, codex_enabled=False,

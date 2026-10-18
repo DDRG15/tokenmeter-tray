@@ -82,6 +82,12 @@ class Windows:
         (self.api.GetClassNameW if classname else self.api.GetWindowTextW)(hwnd, result, len(result))
         return result.value
 
+    def control_text(self, hwnd):
+        # GetWindowText cannot read another process's Edit control contents.
+        result = ctypes.create_unicode_buffer(32768)
+        self.api.SendMessageW(hwnd, 0x000D, len(result), ctypes.addressof(result))  # WM_GETTEXT
+        return result.value
+
     def handles(self, parent=None, all_processes=False):
         found = []
 
@@ -115,9 +121,10 @@ class Windows:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             controls = self.handles(dialog)
-            edits = [h for h in controls if self.text(h, True) == "Edit"]
+            edits = [h for h in controls if self.text(h, True) == "Edit"
+                     and self.api.GetDlgCtrlID(h) in (1001, 1148, 1152)]
             if edits:
-                # In Explorer dialogs the file name is the last Edit.
+                # File-name IDs in modern and classic Explorer dialogs.
                 return edits[-1]
             self.page.wait_for_timeout(50)
         controls = [(self.text(h, True), self.api.GetDlgCtrlID(h)) for h in self.handles(dialog)]
@@ -134,10 +141,14 @@ class Windows:
         assert all(order.index(dialog) < order.index(h) for h in panels), f"{title} ended up behind the panel"
         value = ctypes.create_unicode_buffer(str(path.resolve()))
         self.api.SendMessageW(edit, 0x000C, 0, ctypes.addressof(value))  # WM_SETTEXT
+        assert self.control_text(edit) == value.value, "The dialog did not accept the requested file name"
         self.api.PostMessageW(dialog, 0x0111, 1, 0)  # WM_COMMAND, IDOK
 
-    def accept(self, title, yes=False):
+    def accept(self, title, yes=False, expected_text=None):
         dialog = self.wait_dialog(title)
+        if expected_text is not None:
+            contents = [self.control_text(h) for h in self.handles(dialog)]
+            assert expected_text in contents, f"Unexpected {title} result: {contents}"
         identifier = 6 if yes else 1  # IDYES / IDOK
         buttons = [h for h in self.handles(dialog) if self.api.GetDlgCtrlID(h) == identifier]
         if not buttons:
@@ -217,8 +228,8 @@ def test_native_export_backup_and_restore_roundtrip(tmp_path):
                 target = home / f"export.{format}"
                 click_action(page, f"export_{format}")
                 windows.choose_file("Export usage", target)
-                windows.accept("Export")
-                assert target.is_file()
+                windows.accept("Export", expected_text="File saved with the selected filters.")
+                assert target.is_file(), (home / "app.log").read_text(encoding="utf-8")
                 if format == "json":
                     data = json.loads(target.read_text(encoding="utf-8"))
                     assert data["summary"]["calls"] == 1
@@ -229,7 +240,7 @@ def test_native_export_backup_and_restore_roundtrip(tmp_path):
             click_action(page, "backup")
             backup = home / "backup.zip"
             windows.choose_file("Save backup", backup)
-            windows.accept("Backup")
+            windows.accept("Backup", expected_text="Backup created and verified.")
             assert inspect_backup(backup)["calls"] == 1
             (home / "add-event").touch()
             deadline = time.monotonic() + 10
@@ -240,7 +251,7 @@ def test_native_export_backup_and_restore_roundtrip(tmp_path):
             click_action(page, "restore")
             windows.choose_file("Select backup", backup)
             windows.accept("Restore backup", yes=True)
-            windows.accept("Restore")
+            windows.accept("Restore", expected_text="Backup restored. Reopen TokenMeter.")
             assert proc.wait(timeout=15) == 0
             assert _native.wait(timeout=15) == 0
             assert len(list(home.glob("backup-before-restore-*.zip"))) == 1
@@ -269,8 +280,10 @@ def test_file_dialog_waits_for_its_controls(monkeypatch):
         clock[0] += milliseconds / 1000
     dialog = Windows.__new__(Windows)
     dialog.page = SimpleNamespace(wait_for_timeout=wait)
+    dialog.api = SimpleNamespace(GetDlgCtrlID=lambda h: 1001 if h == 11 else 41477)
     dialog.handles = lambda _parent: [10, 11] if clock[0] >= .1 else [10]
-    dialog.text = lambda handle, _classname: "Edit" if handle == 11 else "Button"
+    # An address-bar Edit must not be mistaken for the still-loading file name.
+    dialog.text = lambda _handle, _classname: "Edit"
     assert dialog.wait_file_edit(1) == 11
     assert clock[0] >= .1
 
