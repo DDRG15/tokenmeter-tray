@@ -6,6 +6,7 @@ global automation of the user's desktop are not used.
 
 import ctypes
 from ctypes import wintypes
+from fnmatch import fnmatchcase
 import json
 import os
 import sqlite3
@@ -116,23 +117,26 @@ class Windows:
         visible = [(self.text(h), [self.text(c) for c in self.handles(h)]) for h in self.handles()]
         pytest.fail(f"{title} did not appear: {visible}")
 
-    def wait_file_edit(self, dialog):
+    def wait_file_edit(self, dialog, initial_name=None):
         # Explorer can show the dialog shell before its file-name controls.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             controls = self.handles(dialog)
             edits = [h for h in controls if self.text(h, True) == "Edit"
                      and self.api.GetDlgCtrlID(h) in (1001, 1148, 1152)]
+            if initial_name is not None:
+                edits = [h for h in edits if fnmatchcase(self.control_text(h), initial_name)]
             if edits:
                 # File-name IDs in modern and classic Explorer dialogs.
                 return edits[-1]
             self.page.wait_for_timeout(50)
-        controls = [(self.text(h, True), self.api.GetDlgCtrlID(h)) for h in self.handles(dialog)]
+        controls = [(self.text(h, True), self.api.GetDlgCtrlID(h), self.control_text(h))
+                    for h in self.handles(dialog)]
         pytest.fail(f"File-name control did not appear within 15 s: {controls}")
 
-    def choose_file(self, title, path):
+    def choose_file(self, title, path, initial_name=None):
         dialog = self.wait_dialog(title)
-        edit = self.wait_file_edit(dialog)
+        edit = self.wait_file_edit(dialog, initial_name)
         # CDP does not generate physical input: another program may keep the focus.
         # What matters is that the dialog does not end up behind the web panel.
         order = self.handles(all_processes=True)
@@ -142,7 +146,10 @@ class Windows:
         value = ctypes.create_unicode_buffer(str(path.resolve()))
         self.api.SendMessageW(edit, 0x000C, 0, ctypes.addressof(value))  # WM_SETTEXT
         assert self.control_text(edit) == value.value, "The dialog did not accept the requested file name"
-        self.api.PostMessageW(dialog, 0x0111, 1, 0)  # WM_COMMAND, IDOK
+        buttons = [h for h in self.handles(dialog) if self.api.GetDlgCtrlID(h) == 1
+                   and self.text(h, True) == "Button"]
+        assert len(buttons) == 1, "The file dialog must have one confirmation button"
+        self.api.PostMessageW(buttons[0], 0x00F5, 0, 0)  # BM_CLICK
 
     def accept(self, title, yes=False, expected_text=None):
         dialog = self.wait_dialog(title)
@@ -227,7 +234,7 @@ def test_native_export_backup_and_restore_roundtrip(tmp_path):
             for format in ("json", "csv"):
                 target = home / f"export.{format}"
                 click_action(page, f"export_{format}")
-                windows.choose_file("Export usage", target)
+                windows.choose_file("Export usage", target, initial_name=f"tokenmeter-*-30d.{format}")
                 windows.accept("Export", expected_text="File saved with the selected filters.")
                 assert target.is_file(), (home / "app.log").read_text(encoding="utf-8")
                 if format == "json":
@@ -239,7 +246,7 @@ def test_native_export_backup_and_restore_roundtrip(tmp_path):
             page.click("#btnMenu")
             click_action(page, "backup")
             backup = home / "backup.zip"
-            windows.choose_file("Save backup", backup)
+            windows.choose_file("Save backup", backup, initial_name="TokenMeter-backup.zip")
             windows.accept("Backup", expected_text="Backup created and verified.")
             assert inspect_backup(backup)["calls"] == 1
             (home / "add-event").touch()
@@ -285,6 +292,23 @@ def test_file_dialog_waits_for_its_controls(monkeypatch):
     # An address-bar Edit must not be mistaken for the still-loading file name.
     dialog.text = lambda _handle, _classname: "Edit"
     assert dialog.wait_file_edit(1) == 11
+    assert clock[0] >= .1
+
+
+def test_file_dialog_waits_for_the_initial_name_before_editing(monkeypatch):
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    def wait(milliseconds):
+        clock[0] += milliseconds / 1000
+    dialog = Windows.__new__(Windows)
+    dialog.page = SimpleNamespace(wait_for_timeout=wait)
+    dialog.api = SimpleNamespace(GetDlgCtrlID=lambda _h: 1001)
+    dialog.handles = lambda _parent: [11]
+    dialog.text = lambda _handle, _classname: "Edit"
+    dialog.control_text = lambda _h: "tokenmeter-example-30d.json" if clock[0] >= .1 else ""
+    assert dialog.wait_file_edit(1, "tokenmeter-*-30d.json") == 11
     assert clock[0] >= .1
 
 
