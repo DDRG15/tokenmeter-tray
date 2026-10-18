@@ -600,6 +600,12 @@ with the exe's native window.
 same call entering through the proxy and through the transcript, in both orders,
 and the resulting percentage.
 
+## Planned platform support
+
+Windows is currently the only supported platform. The next planned milestone
+is **Linux support**, followed by **macOS support**. Work will cover the system
+tray, native window integration, installation, and CI tests for each platform.
+
 ## License
 
 TokenMeter is available under the [MIT License](LICENSE).
