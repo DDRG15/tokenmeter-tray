@@ -110,20 +110,30 @@ class Windows:
         visible = [(self.text(h), [self.text(c) for c in self.handles(h)]) for h in self.handles()]
         pytest.fail(f"{title} did not appear: {visible}")
 
+    def wait_file_edit(self, dialog):
+        # Explorer can show the dialog shell before its file-name controls.
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            controls = self.handles(dialog)
+            edits = [h for h in controls if self.text(h, True) == "Edit"]
+            if edits:
+                # In Explorer dialogs the file name is the last Edit.
+                return edits[-1]
+            self.page.wait_for_timeout(50)
+        controls = [(self.text(h, True), self.api.GetDlgCtrlID(h)) for h in self.handles(dialog)]
+        pytest.fail(f"File-name control did not appear within 15 s: {controls}")
+
     def choose_file(self, title, path):
         dialog = self.wait_dialog(title)
+        edit = self.wait_file_edit(dialog)
         # CDP does not generate physical input: another program may keep the focus.
         # What matters is that the dialog does not end up behind the web panel.
         order = self.handles(all_processes=True)
         panels = [h for h in Windows(self.native_pid).handles() if "TokenMeter" in self.text(h)]
         assert panels, "The web window must be visible"
         assert all(order.index(dialog) < order.index(h) for h in panels), f"{title} ended up behind the panel"
-        controls = self.handles(dialog)
-        edits = [h for h in controls if self.text(h, True) == "Edit"]
-        assert edits, [(self.text(h, True), self.api.GetDlgCtrlID(h)) for h in controls]
-        # In Explorer dialogs the file name is the last Edit.
         value = ctypes.create_unicode_buffer(str(path.resolve()))
-        self.api.SendMessageW(edits[-1], 0x000C, 0, ctypes.addressof(value))  # WM_SETTEXT
+        self.api.SendMessageW(edit, 0x000C, 0, ctypes.addressof(value))  # WM_SETTEXT
         self.api.PostMessageW(dialog, 0x0111, 1, 0)  # WM_COMMAND, IDOK
 
     def accept(self, title, yes=False):
@@ -248,6 +258,36 @@ def test_native_export_backup_and_restore_roundtrip(tmp_path):
             proc.wait(timeout=10)
         log.close()
         guard.__exit__(None, None, None)  # fails clearly if the limit fired
+
+
+def test_file_dialog_waits_for_its_controls(monkeypatch):
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    def wait(milliseconds):
+        clock[0] += milliseconds / 1000
+    dialog = Windows.__new__(Windows)
+    dialog.page = SimpleNamespace(wait_for_timeout=wait)
+    dialog.handles = lambda _parent: [10, 11] if clock[0] >= .1 else [10]
+    dialog.text = lambda handle, _classname: "Edit" if handle == 11 else "Button"
+    assert dialog.wait_file_edit(1) == 11
+    assert clock[0] >= .1
+
+
+def test_missing_file_dialog_controls_fail_with_a_deadline(monkeypatch):
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    def wait(milliseconds):
+        clock[0] += milliseconds / 1000
+    dialog = Windows.__new__(Windows)
+    dialog.page = SimpleNamespace(wait_for_timeout=wait)
+    dialog.handles = lambda _parent: []
+    with pytest.raises(pytest.fail.Exception, match="within 15 s"):
+        dialog.wait_file_edit(1)
+    assert 15 <= clock[0] < 15.1
 
 
 def test_process_tree_includes_children_of_a_venv_launcher():
