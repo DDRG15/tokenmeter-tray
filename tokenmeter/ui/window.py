@@ -368,12 +368,30 @@ def _watch_native_ready(api: _Api, closed: threading.Event) -> None:
         os._exit(EXIT_NO_WEBVIEW)
 
 
+def _test_cdp_port() -> int | None:
+    """Opt-in diagnostics for native tests; never enabled by default."""
+    raw = os.environ.get("TOKENMETER_TEST_CDP_PORT")
+    if raw is None:
+        return None
+    if not raw.isascii() or not raw.isdecimal() or not 1 <= len(raw) <= 5:
+        raise ValueError("TOKENMETER_TEST_CDP_PORT must be a port from 1 to 65535")
+    port = int(raw)
+    if not 1 <= port <= 65535:
+        raise ValueError("TOKENMETER_TEST_CDP_PORT must be a port from 1 to 65535")
+    return port
+
+
 def run_window(url: str, parent_pid: int | None = None) -> int:
     try:
         import webview
     except ImportError:
         return EXIT_NO_WEBVIEW
 
+    # Elevated WebView2 hosts ignore WEBVIEW2_* environment overrides. Pass the
+    # test-only diagnostics port through pywebview's creation-properties API.
+    port = _test_cdp_port()
+    if port is not None:
+        webview.settings["REMOTE_DEBUGGING_PORT"] = port
     install_request_hook_removal()
     api = _Api(parent_pid)
     geo = anchored_geometry()

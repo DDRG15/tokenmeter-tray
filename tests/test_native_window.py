@@ -21,6 +21,24 @@ from tokenmeter.ui import window, webserver
 from tests.test_dashboard import app_without_tk, call
 
 
+def test_cdp_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("TOKENMETER_TEST_CDP_PORT", raising=False)
+    assert window._test_cdp_port() is None
+
+
+@pytest.mark.parametrize("port", ["1", "9222", "65535"])
+def test_cdp_port_accepts_valid_ports(monkeypatch, port):
+    monkeypatch.setenv("TOKENMETER_TEST_CDP_PORT", port)
+    assert window._test_cdp_port() == int(port)
+
+
+@pytest.mark.parametrize("port", ["", "0", "65536", "-1", "9222 --extra-flag", "９２２２"])
+def test_cdp_port_rejects_invalid_values(monkeypatch, port):
+    monkeypatch.setenv("TOKENMETER_TEST_CDP_PORT", port)
+    with pytest.raises(ValueError, match="must be a port"):
+        window._test_cdp_port()
+
+
 def test_ready_shows_window_once_after_first_render():
     class Ops:
         calls = 0
@@ -124,7 +142,7 @@ def native_page(tmp_path, mode, url, parent_pid):
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     env = dict(os.environ, TOKENMETER_HOME=str(tmp_path),
-               WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={port}",
+               TOKENMETER_TEST_CDP_PORT=str(port),
                WEBVIEW2_USER_DATA_FOLDER=str(tmp_path / "webview-profile"))
     command = ([str(Path(executable).resolve())] if mode == "exe" else
                [sys.executable, "-m", "tokenmeter"])

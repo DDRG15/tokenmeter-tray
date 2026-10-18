@@ -26,6 +26,18 @@ from tests.test_proxy import free_port
 REQUEST_ID = "req_011SyntheticShared"
 MESSAGE_ID = "msg_011SyntheticShared"
 
+# Both sources represent a subscription call, independent of the machine's login.
+REQUEST_HEADERS = {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer sk-ant-oat01-synthetic-test-only",
+}
+
+
+class SubscriptionBilling:
+    def get(self):
+        return "subscription", "test"
+
+
 RESPONSE = {
     "id": MESSAGE_ID,
     "model": "claude-opus-5",
@@ -108,7 +120,7 @@ def test_same_call_through_proxy_and_transcript_counts_once(tmp_path, upstream):
     try:
         conn = http.client.HTTPConnection(proxy.host, proxy.port, timeout=15)
         conn.request("POST", "/anthropic/v1/messages", body=b'{"model":"claude-opus-5"}',
-                     headers={"Content-Type": "application/json"})
+                     headers=REQUEST_HEADERS)
         assert conn.getresponse().status == 200
         conn.close()
         # The proxy records the event AFTER delivering the response (the client
@@ -126,7 +138,7 @@ def test_same_call_through_proxy_and_transcript_counts_once(tmp_path, upstream):
     projects = tmp_path / "projects" / "proj"
     projects.mkdir(parents=True)
     transcript_lines(projects / "session.jsonl")
-    TranscriptCollector(store, tmp_path / "projects").scan_once()
+    TranscriptCollector(store, tmp_path / "projects", billing=SubscriptionBilling()).scan_once()
 
     totals = store.totals_since(0)
     assert totals.calls == 1, "the proxy and the transcript are the same call"
@@ -144,7 +156,7 @@ def test_the_same_call_in_reverse_order_also_counts_once(tmp_path, upstream):
     projects = tmp_path / "projects" / "proj"
     projects.mkdir(parents=True)
     transcript_lines(projects / "session.jsonl")
-    TranscriptCollector(store, tmp_path / "projects").scan_once()
+    TranscriptCollector(store, tmp_path / "projects", billing=SubscriptionBilling()).scan_once()
     assert store.totals_since(0).calls == 1
 
     proxy = ProxyCollector(store, "127.0.0.1", free_port(),
@@ -154,7 +166,7 @@ def test_the_same_call_in_reverse_order_also_counts_once(tmp_path, upstream):
     try:
         conn = http.client.HTTPConnection(proxy.host, proxy.port, timeout=15)
         conn.request("POST", "/anthropic/v1/messages", body=b"{}",
-                     headers={"Content-Type": "application/json"})
+                     headers=REQUEST_HEADERS)
         conn.getresponse().read()
         conn.close()
     finally:
@@ -173,7 +185,7 @@ def test_percentage_is_not_inflated_by_the_duplicate_paths(tmp_path, upstream):
     projects = tmp_path / "projects" / "proj"
     projects.mkdir(parents=True)
     transcript_lines(projects / "session.jsonl")
-    TranscriptCollector(store, tmp_path / "projects").scan_once()
+    TranscriptCollector(store, tmp_path / "projects", billing=SubscriptionBilling()).scan_once()
 
     proxy = ProxyCollector(store, "127.0.0.1", free_port(),
                            {"anthropic": f"http://{host}:{port}"})
@@ -182,7 +194,7 @@ def test_percentage_is_not_inflated_by_the_duplicate_paths(tmp_path, upstream):
     try:
         conn = http.client.HTTPConnection(proxy.host, proxy.port, timeout=15)
         conn.request("POST", "/anthropic/v1/messages", body=b"{}",
-                     headers={"Content-Type": "application/json"})
+                     headers=REQUEST_HEADERS)
         conn.getresponse().read()
         conn.close()
     finally:
