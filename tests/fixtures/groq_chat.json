@@ -1,0 +1,25 @@
+{
+  "id": "chatcmpl-synthetic-groq-json",
+  "object": "chat.completion",
+  "created": 1730000000,
+  "model": "llama-3.3-70b-versatile",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "Hello." },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "queue_time": 0.03,
+    "prompt_tokens": 18,
+    "prompt_time": 0.01,
+    "completion_tokens": 556,
+    "completion_time": 0.4,
+    "total_tokens": 574,
+    "total_time": 0.41
+  },
+  "system_fingerprint": "fp_synthetic_groq",
+  "x_groq": { "id": "req_synthetic_groq_0001" }
+}

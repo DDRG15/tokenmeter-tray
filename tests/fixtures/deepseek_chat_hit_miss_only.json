@@ -1,0 +1,22 @@
+{
+  "id": "00000000-0000-4000-8000-000000000002",
+  "object": "chat.completion",
+  "created": 1730000000,
+  "model": "deepseek-chat",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "Hello." },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1500,
+    "completion_tokens": 42,
+    "total_tokens": 1542,
+    "prompt_cache_hit_tokens": 1280,
+    "prompt_cache_miss_tokens": 220
+  },
+  "system_fingerprint": "fp_synthetic_deepseek"
+}

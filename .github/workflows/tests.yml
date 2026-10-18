@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    # The app uses Windows APIs (tray, work area, WebView2), so the tests run
+    # where the product runs.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pinned dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Tests
+        # UI tests use the Edge that ships with the runner; if they cannot
+        # find it, they skip themselves.
+        run: python -m pytest tests -q -p no:cacheprovider
+      - name: Build the executable
+        run: python -m PyInstaller tokenmeter.spec --noconfirm
+      - name: Native window and proxy of the executable
+        env:
+          TOKENMETER_TEST_EXE: dist/TokenMeter.exe
+        run: python -m pytest "tests/test_native_window.py::test_native_webview_renders_real_page_and_accepts_clicks[exe]" tests/test_exe_proxy.py -q -p no:cacheprovider
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TokenMeter
+          path: dist/TokenMeter.exe

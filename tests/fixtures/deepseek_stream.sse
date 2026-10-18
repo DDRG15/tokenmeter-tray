@@ -1,0 +1,12 @@
+: keep-alive
+
+data: {"id":"00000000-0000-4000-8000-000000000003","object":"chat.completion.chunk","created":1730000003,"model":"deepseek-chat","system_fingerprint":"fp_synthetic_deepseek","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}],"usage":null}
+
+: keep-alive
+
+data: {"id":"00000000-0000-4000-8000-000000000003","object":"chat.completion.chunk","created":1730000003,"model":"deepseek-chat","system_fingerprint":"fp_synthetic_deepseek","choices":[{"index":0,"delta":{"content":"Hello"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"00000000-0000-4000-8000-000000000003","object":"chat.completion.chunk","created":1730000003,"model":"deepseek-chat","system_fingerprint":"fp_synthetic_deepseek","choices":[{"index":0,"delta":{"content":""},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":1500,"completion_tokens":42,"total_tokens":1542,"prompt_tokens_details":{"cached_tokens":1280},"prompt_cache_hit_tokens":1280,"prompt_cache_miss_tokens":220}}
+
+data: [DONE]
+

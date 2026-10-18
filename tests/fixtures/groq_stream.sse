@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-synthetic-groq-stream","object":"chat.completion.chunk","created":1730000002,"model":"llama-3.3-70b-versatile","system_fingerprint":"fp_synthetic_groq","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}],"x_groq":{"id":"req_synthetic_groq_0001"}}
+
+data: {"id":"chatcmpl-synthetic-groq-stream","object":"chat.completion.chunk","created":1730000002,"model":"llama-3.3-70b-versatile","system_fingerprint":"fp_synthetic_groq","choices":[{"index":0,"delta":{"content":"Hello"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-synthetic-groq-stream","object":"chat.completion.chunk","created":1730000002,"model":"llama-3.3-70b-versatile","system_fingerprint":"fp_synthetic_groq","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"x_groq":{"id":"req_synthetic_groq_0001","usage":{"queue_time":0.01,"prompt_tokens":46,"prompt_time":0.02,"completion_tokens":112,"completion_time":0.2,"total_tokens":158,"total_time":0.22}}}
+
+data: [DONE]
+

@@ -1,0 +1,42 @@
+{
+  "session_budget_tokens": 500000,
+  "percent_basis": "io",
+  "session_window_hours": 5.0,
+  "percent_scope": "claude",
+
+  "proxy_enabled": true,
+  "proxy_host": "127.0.0.1",
+  "proxy_port": 8787,
+  "upstreams": {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com",
+    "google": "https://generativelanguage.googleapis.com",
+    "openrouter": "https://openrouter.ai/api",
+    "groq": "https://api.groq.com/openai",
+    "ollama": "http://127.0.0.1:11434"
+  },
+  "inject_stream_usage": true,
+
+  "transcripts_enabled": true,
+  "transcripts_root": "",
+  "transcripts_poll_seconds": 2.0,
+
+  "codex_enabled": true,
+  "codex_root": "",
+  "codex_poll_seconds": 5.0,
+
+  "billing_overrides": {},
+
+  "warn_percent": 60,
+  "danger_percent": 85,
+  "show_cost": true,
+
+  "alerts_enabled": true,
+  "alert_thresholds": [60, 85, 100],
+
+  "weekly_enabled": true,
+  "weekly_window_days": 7.0,
+  "weekly_budget_tokens": 3000000,
+
+  "retain_days": 90
+}
