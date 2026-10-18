@@ -9,6 +9,7 @@ from ctypes import wintypes
 from fnmatch import fnmatchcase
 import json
 import os
+from pathlib import Path
 import sqlite3
 from contextlib import closing
 import subprocess
@@ -125,7 +126,10 @@ class Windows:
             edits = [h for h in controls if self.text(h, True) == "Edit"
                      and self.api.GetDlgCtrlID(h) in (1001, 1148, 1152)]
             if initial_name is not None:
-                edits = [h for h in edits if fnmatchcase(self.control_text(h), initial_name)]
+                # Explorer can hide the selected file type's extension.
+                patterns = (initial_name, str(Path(initial_name).with_suffix("")))
+                edits = [h for h in edits if any(fnmatchcase(self.control_text(h), pattern)
+                                               for pattern in patterns)]
             if edits:
                 # File-name IDs in modern and classic Explorer dialogs.
                 return edits[-1]
@@ -144,7 +148,14 @@ class Windows:
         assert panels, "The web window must be visible"
         assert all(order.index(dialog) < order.index(h) for h in panels), f"{title} ended up behind the panel"
         value = ctypes.create_unicode_buffer(str(path.resolve()))
-        self.api.SendMessageW(edit, 0x000C, 0, ctypes.addressof(value))  # WM_SETTEXT
+        # WM_SETTEXT can change the visible Edit without updating the modern
+        # dialog's selected name. Character messages trigger its normal edit
+        # notifications, confined to this test-owned control.
+        self.api.SendMessageW(edit, 0x00B1, 0, -1)  # EM_SETSEL: select all
+        encoded = value.value.encode("utf-16-le")
+        for offset in range(0, len(encoded), 2):
+            unit = int.from_bytes(encoded[offset:offset + 2], "little")
+            self.api.SendMessageW(edit, 0x0102, unit, 1)  # WM_CHAR
         assert self.control_text(edit) == value.value, "The dialog did not accept the requested file name"
         buttons = [h for h in self.handles(dialog) if self.api.GetDlgCtrlID(h) == 1
                    and self.text(h, True) == "Button"]
@@ -295,7 +306,8 @@ def test_file_dialog_waits_for_its_controls(monkeypatch):
     assert clock[0] >= .1
 
 
-def test_file_dialog_waits_for_the_initial_name_before_editing(monkeypatch):
+@pytest.mark.parametrize("initial_value", ["tokenmeter-example-30d.json", "tokenmeter-example-30d"])
+def test_file_dialog_waits_for_the_initial_name_before_editing(monkeypatch, initial_value):
     from types import SimpleNamespace
 
     clock = [0.0]
@@ -307,7 +319,7 @@ def test_file_dialog_waits_for_the_initial_name_before_editing(monkeypatch):
     dialog.api = SimpleNamespace(GetDlgCtrlID=lambda _h: 1001)
     dialog.handles = lambda _parent: [11]
     dialog.text = lambda _handle, _classname: "Edit"
-    dialog.control_text = lambda _h: "tokenmeter-example-30d.json" if clock[0] >= .1 else ""
+    dialog.control_text = lambda _h: initial_value if clock[0] >= .1 else ""
     assert dialog.wait_file_edit(1, "tokenmeter-*-30d.json") == 11
     assert clock[0] >= .1
 
