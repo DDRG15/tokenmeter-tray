@@ -14,8 +14,8 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Pinned dependencies
@@ -30,7 +30,7 @@ jobs:
         env:
           TOKENMETER_TEST_EXE: dist/TokenMeter.exe
         run: python -m pytest "tests/test_native_window.py::test_native_webview_renders_real_page_and_accepts_clicks[exe]" tests/test_exe_proxy.py -q -p no:cacheprovider
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: TokenMeter
           path: dist/TokenMeter.exe
