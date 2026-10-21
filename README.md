@@ -38,6 +38,18 @@ No `.env` file or API key is needed: the configuration lives in
 
 ## Installation
 
+### Download the built Windows executable
+
+Open [GitHub Actions](https://github.com/DDRG15/tokenmeter-tray/actions), select
+a successful `tests` run for `main`, and download the **TokenMeter** artifact.
+GitHub requires signing in to download workflow artifacts. Extract the archive
+and run `TokenMeter.exe`; Python is not required for this build. Workflow
+artifacts expire according to the repository's retention settings.
+
+To build from source or use the installer and shortcuts, follow the steps below.
+
+### Run or build from source
+
 Download the repository using GitHub's **Code > Download ZIP** and extract
 it, or clone it with Git:
 
@@ -95,7 +107,7 @@ taskbar` and turn on `TokenMeter`.
 To remove the shortcuts: `.\install.ps1 -Uninstall`. The data folder stays at
 `%APPDATA%\TokenMeter`.
 
-## The two data sources
+## The three data sources
 
 ### 1. Claude Code transcripts — nothing to configure
 
@@ -125,7 +137,19 @@ you give it.
 The proxy forwards headers and credentials untouched and **does not write any
 request or response body to disk**. It only persists `usage` numbers.
 
-### Why running both at once does not double-count
+### 3. Codex sessions
+
+Reads local JSONL rollouts in `~/.codex/sessions` and
+`~/.codex/archived_sessions`, or the directory selected by `CODEX_HOME` or
+`codex_root` in TokenMeter's configuration. It counts individual response usage
+records and displays the rate limits reported in the session files. Cumulative
+turn and thread totals are not added again.
+
+Codex usage appears in its own card and the overall breakdown. It does not spend
+the Claude session budget when `percent_scope` is `subscription_anthropic`, the
+default. Use `--no-codex` or `"codex_enabled": false` to disable this collector.
+
+### Why transcripts and the proxy do not double-count
 
 Both collectors identify each call by the Anthropic `request-id` —the same value
 Claude Code stores as `requestId` in its transcript— and the database has it as a
@@ -565,7 +589,9 @@ With the installation's venv active:
 
 ```powershell
 python -m pip install -r requirements-dev.txt   # starts with -r requirements.txt
-python -m pytest tests -q
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+$env:PYTHONUTF8 = "1"
+python -m pytest tests -q -p no:cacheprovider
 ```
 
 `requirements-dev.txt` includes `requirements.txt` and adds pytest, Playwright and
@@ -599,6 +625,25 @@ with the exe's native window.
 `tests/test_integration_dedupe.py` covers the design's most likely failure: the
 same call entering through the proxy and through the transcript, in both orders,
 and the resulting percentage.
+
+## Continuous integration
+
+The [Windows workflow](.github/workflows/tests.yml) runs on pushes and pull
+requests, installs the pinned development requirements with Python 3.12, runs
+the source tests, builds `dist/TokenMeter.exe`, tests the packaged window and
+proxy, and uploads the **TokenMeter** artifact.
+
+Its actions use Node.js 24: `actions/checkout@v6`,
+`actions/setup-python@v6` and `actions/upload-artifact@v6`. Node.js is supplied
+by the GitHub runner for those actions; installing TokenMeter locally requires
+no Node.js or npm setup. See the official manifests for
+[checkout](https://github.com/actions/checkout/blob/v6/action.yml),
+[setup-python](https://github.com/actions/setup-python/blob/v6/action.yml) and
+[upload-artifact](https://github.com/actions/upload-artifact/blob/v6/action.yml).
+
+Development setup, code layout, native-test troubleshooting and publication
+checks are in [CONTRIBUTING.md](CONTRIBUTING.md). Synthetic parser data is
+documented in [the fixture guide](tests/fixtures/README.md).
 
 ## Planned platform support
 
