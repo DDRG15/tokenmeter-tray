@@ -80,7 +80,7 @@ def test_backup_rejects_paths_and_unsupported_members(tmp_path):
 
 
 @pytest.mark.parametrize("filename", ["config.json", "usage.db", "usage.db-wal", "usage.db-shm",
-                                     "instance.lock", "tokenmeter.log", "unused/../CONFIG.JSON"])
+                                     "instance.lock", "tokenmeter.log", pytest.param("unused/../CONFIG.JSON", marks=pytest.mark.skipif(sys.platform != "win32", reason="Windows case-insensitive filename alias"))])
 def test_backup_cannot_replace_internal_files(tmp_path, filename):
     cfg = Config()
     config_path = tmp_path / "config.json"
@@ -97,6 +97,7 @@ def test_backup_cannot_replace_internal_files(tmp_path, filename):
         store.close()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows export dialog; GTK has native protection tests")
 @pytest.mark.parametrize("format", ["json", "csv"])
 def test_export_cannot_replace_configuration(tmp_path, monkeypatch, format):
     import tokenmeter.app as app_module
@@ -111,7 +112,7 @@ def test_export_cannot_replace_configuration(tmp_path, monkeypatch, format):
     monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **_: str(target))
     monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **_: errors.append(args))
     try:
-        app._export({"action": f"export_{format}", "days": 7})
+        app_module.App._export(app, {"action": f"export_{format}", "days": 7})
         assert len(errors) == 1 and "internal data" in errors[0][1]
         assert target.read_bytes() == before
         assert app.store.totals_since(0).calls == 1
@@ -180,6 +181,7 @@ def test_cli_maintenance_is_rejected_when_app_has_lock(tmp_path,monkeypatch):
     assert not (tmp_path/"usage.db").exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk lifecycle; GTK has native closure tests")
 def test_shutdown_requests_the_close_and_the_loop_handles_it(tmp_path, monkeypatch):
     """The installer closes with `--shutdown` instead of killing the app mid-write."""
     import tokenmeter.__main__ as cli

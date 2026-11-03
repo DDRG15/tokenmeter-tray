@@ -6,12 +6,13 @@ import argparse
 import logging
 import sys
 
-from .app import App
 from .config import Config, data_dir
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tokenmeter", description=__doc__)
+    parser.add_argument("--linux-prototype", action="store_true",
+                        help="compatibility alias; Linux now uses the native GTK shell by default")
     parser.add_argument("--debug", action="store_true", help="verbose console logging")
     parser.add_argument("--no-proxy", action="store_true", help="do not open the local proxy")
     parser.add_argument("--no-transcripts", action="store_true",
@@ -34,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window", metavar="URL", help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    if sys.platform.startswith("linux") and args.window:
+        parser.error("The embedded web window is Windows-only")
 
     if args.window:
         from .ui.window import run_window
@@ -107,6 +111,10 @@ def _run(args) -> int:
         return 0
 
     (data_dir() / "quit.request").unlink(missing_ok=True)
+    if sys.platform.startswith("linux"):
+        from .ui.linux import run
+        return run(config)
+    from .app import App
     app = App(config)
     if config.proxy_enabled:
         for provider in sorted(config.upstreams):
@@ -183,7 +191,7 @@ def start_fresh(config: Config, now: float | None = None) -> int:
         finally:
             original.close()
     for filename in ("config.json",):
-        source = home / filename
+        source = Config.path() if filename == "config.json" else home / filename
         if source.exists():
             shutil.copy2(source, backup / filename)
     print(f"backup      : {backup}")

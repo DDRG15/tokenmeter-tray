@@ -1,0 +1,6 @@
+-r requirements-mcp.txt
+iniconfig==2.3.0
+packaging==26.2
+pluggy==1.6.0
+pytest==8.2.2
+pytest-timeout==2.4.0

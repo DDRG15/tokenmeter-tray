@@ -262,6 +262,7 @@ def test_window_operations_never_block_on_the_ui_thread():
     assert api._wait_until_ready(0)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows WebView/process integration")
 def test_per_request_hook_is_removed_from_pinned_pywebview():
     """The hook that made every network request need the GIL is dropped right
     after WebView2 initialises. Pinned to the pywebview version it was written for."""
@@ -274,6 +275,7 @@ def test_per_request_hook_is_removed_from_pinned_pywebview():
     assert getattr(edgechromium.EdgeChrome.on_webview_ready, "_tokenmeter_patched", False)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows WebView/process integration")
 def test_kill_after_kills_a_hung_process_and_fails_clearly():
     hung = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                             creationflags=window.CREATE_NO_WINDOW)

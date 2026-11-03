@@ -181,7 +181,8 @@ def load_rate_limits(store: Store) -> dict | None:
 class CodexCollector(Collector):
     name = "codex"
 
-    def __init__(self, store: Store, root: Path, poll_seconds: float = 5.0) -> None:
+    def __init__(self, store: Store, root: Path, poll_seconds: float = 5.0, *,
+                 read_authentication: bool = True) -> None:
         super().__init__()
         self._store = store
         self._root = root
@@ -190,6 +191,7 @@ class CodexCollector(Collector):
         self._covered_until: float | None = None
         self._contexts: dict[str, _FileContext] = {}
         self._auth_mode = ""
+        self._read_authentication = read_authentication
 
     def run(self) -> None:
         while not self._stop.is_set():
@@ -218,7 +220,7 @@ class CodexCollector(Collector):
         self.stats.last_error = ""
         if not self._root.exists():
             return 0
-        self._auth_mode = read_auth_mode(self._root)
+        self._auth_mode = read_auth_mode(self._root) if self._read_authentication else ""
         added = 0
         files = 0
         oldest = None

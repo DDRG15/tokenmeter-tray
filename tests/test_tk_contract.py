@@ -1,9 +1,9 @@
 """The real Tk windows must respect the same contract as the dashboard."""
 
 import time
-import tkinter as tk
-
 import pytest
+
+tk = pytest.importorskip("tkinter", reason="Windows Tk fallback toolkit not installed")
 
 from tests.test_dashboard import app_without_tk, call
 from tokenmeter.models import UsageEvent

@@ -17,9 +17,9 @@ import traceback
 
 
 def main() -> int:
-    from tokenmeter.config import data_dir
+    from tokenmeter.config import state_dir
 
-    folder = data_dir()
+    folder = state_dir()
     folder.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(

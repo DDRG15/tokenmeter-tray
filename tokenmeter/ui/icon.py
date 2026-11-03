@@ -30,8 +30,12 @@ TRACK_ON_LIGHT = (0, 0, 0, 55)
 _THEME_TTL = 5.0  # the user can change the theme while the app is open
 _theme_cache: tuple[float, bool] = (0.0, False)
 
-# Windows fonts, from most to least preferred.
-FONT_CANDIDATES = ("segoeuib.ttf", "seguisb.ttf", "arialbd.ttf", "segoeui.ttf")
+# Preserve Windows preferences, then use scalable fonts available on Linux.
+# A tiny bitmap fallback disappears when the supersampled image is reduced.
+FONT_CANDIDATES = (
+    "segoeuib.ttf", "seguisb.ttf", "arialbd.ttf", "segoeui.ttf",
+    "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf",
+)
 
 
 def taskbar_is_light() -> bool:
@@ -78,7 +82,7 @@ def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
             return ImageFont.truetype(name, size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    return ImageFont.load_default(size=size)
 
 
 def _label(percent: float, has_activity: bool) -> str:

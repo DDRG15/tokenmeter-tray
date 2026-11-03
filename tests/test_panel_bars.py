@@ -4,6 +4,8 @@ Tk cannot be brought up without a display in CI, so the pure function that
 decides the width is tested — which is where the bug was.
 """
 
+import pytest
+pytest.importorskip("tkinter", reason="Windows Tk fallback toolkit not installed")
 from tokenmeter.ui.panel import CONTENT_WIDTH, bar_width
 
 

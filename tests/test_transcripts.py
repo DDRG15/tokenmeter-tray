@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from tokenmeter.collectors.transcripts import (
     TranscriptCollector,
     event_from_line,
@@ -233,3 +235,12 @@ def test_proxy_and_transcript_agree_on_the_dedupe_key():
         assistant_line(request_id="req_011SyntheticRequest0001", msg_id="msg_x")
     )
     assert from_proxy.dedupe_key == from_transcript.dedupe_key
+
+
+@pytest.fixture(autouse=True)
+def synthetic_transcript_billing(monkeypatch):
+    """Parser/tailer tests never inspect authentication in the real home."""
+    class UnknownBilling:
+        def get(self):
+            return ("unknown", "")
+    monkeypatch.setattr("tokenmeter.collectors.transcripts.CachedBilling", UnknownBilling)

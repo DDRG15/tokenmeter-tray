@@ -6,8 +6,8 @@ on:
 
 jobs:
   windows:
-    # The app uses Windows APIs (tray, work area, WebView2), so the tests run
-    # where the product runs.
+    if: ${{ !startsWith(github.ref_name, 'linux/') && !startsWith(github.head_ref, 'linux/') }}
+    # Existing Windows release: tray, work area and WebView2 integration.
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -34,3 +34,87 @@ jobs:
         with:
           name: TokenMeter
           path: dist/TokenMeter.exe
+
+  mcp-linux:
+    # Headless, optional MCP environment; no desktop libraries or browser.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Pinned MCP dependencies
+        run: python -m pip install -r requirements-mcp-dev.txt
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: MCP protocol, queries and source readers
+        run: python -m pytest tests/test_usage_query.py tests/test_mcp.py tests/test_codex.py tests/test_transcripts.py tests/test_store_dedupe.py -q -p no:cacheprovider
+
+  linux-ui:
+    # Generic GTK integration in a private virtual display; Cinnamon is also
+    # exercised locally. This job does not claim Wayland or full distro support.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      GSETTINGS_BACKEND: memory
+      GIO_USE_VFS: local
+      NO_AT_BRIDGE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Distribution GTK bindings and isolated display tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 xvfb xauth dbus-x11 desktop-file-utils
+      - name: Allocate a task-owned sandbox
+        id: linux_sandbox
+        run: |
+          mkdir -p "$HOME/sandbox"
+          task_dir=$(mktemp -d "$HOME/sandbox/tokenmeter-linux-ci.XXXXXX")
+          echo "path=$task_dir" >> "$GITHUB_OUTPUT"
+      - name: Native GTK controls and file operations
+        env:
+          TOKENMETER_TEST_ROOT: ${{ steps.linux_sandbox.outputs.path }}
+        run: |
+          mkdir -p "$TOKENMETER_TEST_ROOT/tmp"
+          export TMPDIR="$TOKENMETER_TEST_ROOT/tmp"
+          export TOKENMETER_HOME="$TOKENMETER_TEST_ROOT/default-data"
+          export TOKENMETER_WHEELHOUSE="$TOKENMETER_TEST_ROOT/wheels"
+          export PLAYWRIGHT_BROWSERS_PATH="$TOKENMETER_TEST_ROOT/browsers"
+          export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000
+          /usr/bin/python3 -c 'import sys; assert sys.version_info[:2] == (3, 12)'
+          /usr/bin/python3 -m venv "$TOKENMETER_TEST_ROOT/venv"
+          /usr/bin/python3 scripts/expose_system_gi.py --venv "$TOKENMETER_TEST_ROOT/venv"
+          "$TOKENMETER_TEST_ROOT/venv/bin/python" -m pip install --cache-dir "$TOKENMETER_TEST_ROOT/cache" -r requirements-linux-dev.txt
+          "$TOKENMETER_TEST_ROOT/venv/bin/python" -m pip check
+          "$TOKENMETER_TEST_ROOT/venv/bin/python" -m playwright install --with-deps chromium
+          "$TOKENMETER_TEST_ROOT/venv/bin/python" -m pip download --cache-dir "$TOKENMETER_TEST_ROOT/cache" -d "$TOKENMETER_WHEELHOUSE" -r requirements-linux.txt
+          dbus-run-session --config-file tests/fixtures/dbus-session.conf -- xvfb-run -a "$TOKENMETER_TEST_ROOT/venv/bin/python" -m pytest tests -q -p no:cacheprovider --basetemp="$TOKENMETER_TEST_ROOT/pytest" --junitxml="$TOKENMETER_TEST_ROOT/results.xml"
+      - name: Build Linux source distribution
+        env:
+          TOKENMETER_TEST_ROOT: ${{ steps.linux_sandbox.outputs.path }}
+        run: /usr/bin/python3 -B scripts/build_linux_archive.py --output "$TOKENMETER_TEST_ROOT/TokenMeter-linux.tar.gz"
+      - name: Preserve Linux test diagnostics
+        if: always() && steps.linux_sandbox.outputs.path != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-ui-diagnostics
+          if-no-files-found: ignore
+          path: |
+            ${{ steps.linux_sandbox.outputs.path }}/TokenMeter-linux.tar.gz
+            ${{ steps.linux_sandbox.outputs.path }}/results.xml
+            ${{ steps.linux_sandbox.outputs.path }}/pytest/**/child.log
+      - name: Remove only this job's sandbox
+        if: always() && steps.linux_sandbox.outputs.path != ''
+        env:
+          TOKENMETER_TEST_ROOT: ${{ steps.linux_sandbox.outputs.path }}
+        run: |
+          case "$TOKENMETER_TEST_ROOT" in
+            "$HOME/sandbox/tokenmeter-linux-ci."*) rm -rf -- "$TOKENMETER_TEST_ROOT" ;;
+            *) echo "Unexpected sandbox path; refusing cleanup" >&2; exit 1 ;;
+          esac

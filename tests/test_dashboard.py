@@ -1,13 +1,13 @@
 """Web window: the JSON the page draws, the server and the launcher.
 
-The `App` is built without Tk (`App.__new__`) with a real `Store`: that way the
-state comes from the same logic the Tk panel uses and not from a double that
-could diverge from it.
+The shared RuntimeState is built with a real Store. Both desktop shells use
+these observers, so the fixture imports no GUI toolkit.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -15,7 +15,7 @@ import urllib.request
 import pytest
 
 from tokenmeter import dashboard
-from tokenmeter.app import App
+from tokenmeter.state import RuntimeState as App
 from tokenmeter.config import Config
 from tokenmeter.models import UsageEvent
 from tokenmeter.session import SessionTracker
@@ -222,6 +222,7 @@ def test_if_the_child_fails_the_fallback_is_used(tmp_path, monkeypatch):
     assert used == ["http://u/"]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows embedded window lifecycle")
 def test_the_cli_diverts_window_to_the_child(monkeypatch):
     import tokenmeter.__main__ as cli
 
@@ -243,6 +244,7 @@ def test_weekly_reset_shows_a_fixed_english_weekday(tmp_path):
     assert app.weekly.snapshot(before).reset_at_text() == "Thu 15/10 22:11"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows embedded window lifecycle")
 def test_closing_the_window_walks_down_the_process_tree(tmp_path):
     """A one-file .exe is two processes; terminate() left the grandchild alive."""
     import subprocess

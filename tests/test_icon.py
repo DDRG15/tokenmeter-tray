@@ -35,7 +35,9 @@ def test_text_flips_with_the_taskbar_theme():
     """Fixed white text disappears on the light taskbar."""
     dark = render_icon(50, size=64, light_taskbar=False)
     light = render_icon(50, size=64, light_taskbar=True)
-    assert dark.getpixel((32, 32)) != light.getpixel((32, 32))
+    # Different scalable fonts put either ink or the gap between digits at
+    # the exact center. Compare the rendered images, not one arbitrary pixel.
+    assert dark.tobytes() != light.tobytes()
 
     # The icon's center falls inside the glyph or the gap; the set of colors
     # present is compared instead, which does tell both themes apart.

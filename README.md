@@ -1,9 +1,9 @@
 # TokenMeter
 
-An LLM token meter that lives in the Windows system tray. The tray icon shows the
-percentage consumed of the active session; clicking it opens a frameless window
-with the session ring, the 5-hour window countdown, the weekly window, the token
-breakdown, the API-equivalent cost per model and a per-day history.
+An LLM token meter for the Windows system tray and Linux Mint Cinnamon. It shows
+the active session, 5-hour countdown, weekly window, token breakdown,
+API-equivalent estimates and daily history. Windows uses its frameless dashboard;
+Linux uses native GTK 3 with Ayatana, without WebView or a browser.
 
 It works with any provider, not just Claude.
 
@@ -22,21 +22,56 @@ flowchart TD
     DB[("SQLite<br/>dedupe by request-id")]
 
     DB -- "rolling 5 h window" --> I["Tray icon"]
-    DB -- "JSON every 1 s" --> S["Local server<br/>127.0.0.1 + token"]
-    S --> W["Frameless window<br/>(pywebview, separate process)"]
+    DB --> G["Linux: native GTK window"]
+    DB -- "JSON every 1 s" --> S["Windows: local server<br/>127.0.0.1 + token"]
+    S --> W["Windows: frameless window<br/>(pywebview, separate process)"]
+    F["Local usage files"] --> T
+    F --> C
+    F -- "on-demand scan" --> M["Optional Linux MCP<br/>in-memory aggregation"]
+    M -- "stdio" --> MC["MCP client"]
 ```
+
+## Linux desktop and optional MCP
+
+Linux installation and the Linux-only MCP are published on the
+`linux/native-gtk` branch; see the clone instructions in [LINUX.md](LINUX.md).
+
+The Linux desktop and MCP serve different purposes:
+
+| Interface | Purpose | Linux implementation |
+|---|---|---|
+| Desktop | Tray icon, native controls, history, exports and calibration | GTK 3 and Ayatana; see [LINUX.md](LINUX.md) |
+| Optional MCP | Read-only local usage queries from an MCP client | Separate Python environment, launched on demand over stdin/stdout; see [MCP.md](MCP.md) |
+
+The Windows desktop uses Tk and WebView2. This branch's optional MCP server
+is supported only on Linux and rejects other platforms before scanning sources.
+It uses the standard MCP protocol over stdio and does not depend on either
+desktop UI. Use a separate `tokenmeter-linux-mcp` environment and a
+`tokenmeter-linux` client registration to keep it distinct from other setups.
+
+MCP provides `get_usage_summary`, `get_usage_history` and `get_collector_status`.
+It scans usage files into an in-memory database for each query, leaving the
+installed desktop database untouched. It does not read credentials, open a GUI,
+listen on HTTP or install a service. Install its pinned dependencies in a
+separate environment: the desktop and MCP lockfiles must not be combined.
 
 ## Requirements
 
-- **Windows 10 or 11.** The tray icon, the window and autostart use Windows APIs;
-  it does not run on Linux or macOS.
-- **Python 3.12** (tested with 3.12.10). Check yours with `python --version`.
-- **Microsoft Edge / WebView2**, which Windows 10/11 already ships.
+- **Linux Mint 22.3 Cinnamon/X11:** native GTK 3/Ayatana; installation and XDG
+  paths are documented in [LINUX.md](LINUX.md). Other Linux desktops/Wayland
+  and macOS have not been validated.
+- **Windows 10 or 11:** Windows tray and desktop APIs.
+- **Python 3.12** (Linux tested with 3.12.3; Windows with 3.12.10). Check yours with `python --version`.
+- **Microsoft Edge / WebView2** on Windows, which Windows 10/11 already ships.
+  Linux does not use it.
 
-No `.env` file or API key is needed: the configuration lives in
+No `.env` file or API key is needed. On Windows the configuration lives in
 `%APPDATA%\TokenMeter\config.json` and is created on first launch.
 
 ## Installation
+
+For Linux Mint, follow [LINUX.md](LINUX.md). Its user installer does not start
+the app; autostart is optional and off by default. The steps below target Windows.
 
 ### Download the built Windows executable
 
@@ -268,7 +303,7 @@ showing the session, which is the number that changes by the minute.
 If the app stays closed for weeks, the cycle advances on its own when you reopen
 it.
 
-## The window
+## The Windows window
 
 Click the icon → **Open TokenMeter**. It is an HTML page drawn in a frameless
 window (pywebview on WebView2, the Edge engine that Windows already ships),
@@ -346,10 +381,11 @@ and thresholds are kept. Then calibrate again.
 
 ## Alerts
 
-A Windows notification when the session crosses **60%, 85% and 100%**, with the
-tokens left and when the window resets.
+A desktop notification when the session crosses **60%, 85% and 100%**, with the
+tokens left and when the window resets. Linux uses an already-running desktop
+notification service; its Settings tab controls alerts.
 
-One alert per threshold and per session: the UI loop evaluates every second, so
+One alert per threshold and per session: the UI loop evaluates periodically, so
 without that rule crossing 60% would fire one balloon per second. If you open the
 app with several thresholds already crossed, it only alerts for the highest one.
 
@@ -566,8 +602,9 @@ inference from the documentation, not a measurement.
 - **It does not read the claude.ai % automatically.** That would require scraping
   with your session cookies, against an undocumented UI. That is why calibration
   is done by entering the number by hand.
-- **Windows only.** The icon, the panel position, theme detection and autostart
-  use Windows APIs.
+- **Desktop coverage.** Native Linux support is validated on Mint Cinnamon/X11.
+  Wayland and macOS are unverified. Windows tray placement, theme detection and
+  installer integration use Windows APIs.
 
 ## Updating and rolling back
 
@@ -599,6 +636,12 @@ PyInstaller, all pinned. `.github/workflows/tests.yml` installs that same file,
 runs the tests and builds the `.exe` on Windows with Python 3.12. The UI tests open
 the real page in Edge with Playwright and skip themselves if there is no browser.
 Native-window tests open real windows on your screen and can take a few minutes.
+
+For Linux, follow the isolated setup in [LINUX_DEVELOPMENT.md](LINUX_DEVELOPMENT.md)
+with `requirements-linux-dev.txt`. It includes Playwright; browser checks use
+Chromium (or an explicitly selected installed Chrome). Missing Linux browser
+dependencies fail the checks. GTK is the Linux desktop toolkit; Windows Tk and
+WebView2 cases are outside that platform's scope.
 
 The `.exe` tests are enabled after building it:
 
@@ -645,11 +688,14 @@ Development setup, code layout, native-test troubleshooting and publication
 checks are in [CONTRIBUTING.md](CONTRIBUTING.md). Synthetic parser data is
 documented in [the fixture guide](tests/fixtures/README.md).
 
-## Planned platform support
+Separate Linux jobs validate the optional MCP stdio server and the desktop suite, including
+GTK controls on private D-Bus/Xvfb, offline staged installation and reproducible
+source packaging. The Linux archive is uploaded with the Linux diagnostics.
+Local test success does not replace CI for the exact published commit.
 
-Windows is currently the only supported platform. The next planned milestone
-is **Linux support**, followed by **macOS support**. Work will cover the system
-tray, native window integration, installation, and CI tests for each platform.
+Linux installation is in [LINUX.md](LINUX.md); isolated development and cleanup
+are in [LINUX_DEVELOPMENT.md](LINUX_DEVELOPMENT.md). Mint Cinnamon/X11 has native
+integration tests; Wayland and macOS remain unvalidated.
 
 ## License
 

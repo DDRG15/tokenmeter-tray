@@ -135,6 +135,13 @@ class ModelTotals(Totals):
 class Store:
     """Concurrent access from several collector threads."""
 
+    @classmethod
+    def in_memory(cls):
+        """An ephemeral SQLite store; no database or journal file is created."""
+        store = cls(Path(":memory:"))
+        store._conn.execute("PRAGMA temp_store=MEMORY")
+        return store
+
     def __init__(self, db_path: Path, retain_days: int | None = None) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._closed = False
