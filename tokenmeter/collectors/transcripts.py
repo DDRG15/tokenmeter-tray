@@ -34,6 +34,18 @@ class TranscriptStats:
     last_error: str = ""
 
 
+# SQLite stores 64-bit integers; a corrupt or hostile count above that would
+# abort the whole scan. Real counts are far below 2**53.
+MAX_COUNT = 2**53
+
+
+def bounded_count(value: object) -> int:
+    """A token count from a record: a non-negative int, 0 when absent or malformed."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return min(max(0, value), MAX_COUNT)
+
+
 def parse_timestamp(raw: object) -> float | None:
     """`2026-08-12T15:33:17.376Z` → unix. Returns None if it cannot be parsed."""
     if not isinstance(raw, str) or not raw:
@@ -66,7 +78,7 @@ def event_from_line(line: str) -> UsageEvent | None:
 
     def num(key: str) -> int:
         value = usage.get(key)
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+        return bounded_count(value)
 
     # `cache_creation` breaks the write down by TTL. The 1-hour one costs 2x the
     # input versus 1.25x for the 5-minute one, so without this breakdown the
@@ -150,6 +162,14 @@ class TranscriptCollector(Collector):
         files = 0
         oldest = None
         for path in sorted(self._root.glob("**/*.jsonl")):
+            if self.modified_since is not None:
+                # On-demand readers skip files nobody wrote to since the cutoff:
+                # an event inside the window cannot live only in such a file.
+                try:
+                    if path.stat().st_mtime < self.modified_since:
+                        continue
+                except OSError:
+                    continue
             files += 1
             if self._covered_until is None:
                 try:

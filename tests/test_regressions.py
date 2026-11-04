@@ -187,6 +187,18 @@ def test_unknown_billing_cannot_be_a_certain_api_zero():
     assert costs["api_spend"]["partial"] is True
 
 
+def test_unknown_billing_cannot_be_a_certain_subscription_zero():
+    _, costs, _ = _models([ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1)])
+    assert costs["subscription_equivalent"]["value"] is None
+    assert costs["subscription_equivalent"]["partial"] is True
+    _, mixed, _ = _models([
+        ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1,billing="subscription"),
+        ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1)])
+    assert mixed["subscription_equivalent"]["value"] > 0
+    assert mixed["subscription_equivalent"]["partial"] is True
+    assert mixed["subscription_equivalent"]["text"].count("(partial)") == 1
+
+
 def test_rescan_respects_overrides(tmp_path, monkeypatch):
     from tokenmeter.__main__ import rescan
     monkeypatch.setenv("TOKENMETER_HOME",str(tmp_path))

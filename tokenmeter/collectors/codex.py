@@ -41,7 +41,7 @@ from ..models import (
 )
 from ..store import Store
 from .base import Collector
-from .transcripts import parse_timestamp
+from .transcripts import bounded_count, parse_timestamp
 
 log = logging.getLogger(__name__)
 
@@ -81,9 +81,7 @@ class _FileContext:
 
 
 def _int(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return 0
-    return max(0, value)
+    return bounded_count(value)
 
 
 def read_auth_mode(root: Path) -> str:
@@ -232,6 +230,14 @@ class CodexCollector(Collector):
         files = 0
         oldest = None
         for path in self._rollouts():
+            if self.modified_since is not None:
+                # On-demand readers skip files nobody wrote to since the cutoff:
+                # an event inside the window cannot live only in such a file.
+                try:
+                    if path.stat().st_mtime < self.modified_since:
+                        continue
+                except OSError:
+                    continue
             files += 1
             if self._covered_until is None:
                 try:
