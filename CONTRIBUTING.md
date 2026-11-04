@@ -83,8 +83,9 @@ Do not replace it with file-descriptor capture when diagnosing dialog failures.
 ## CI and publication
 
 [The workflow](.github/workflows/tests.yml) runs the same pinned requirements
-in the Windows job on `windows-latest` with Python 3.12. Branches prefixed
-`linux/` run only the Linux desktop and Linux MCP jobs. Separate Linux jobs
+in the Windows job on `windows-latest` with Python 3.12. Every push and pull
+request runs the Windows job, including `linux/` branches, because the Linux
+work shares runtime, storage and collector code with Windows. Separate Linux jobs
 cover the optional MCP stdio server and native GTK controls/file dialogs. The
 Linux job also installs pinned Playwright Chromium and runs the web dashboard
 and cross-origin proxy protection tests. A browser launch failure fails those

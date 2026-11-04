@@ -101,9 +101,10 @@ def test_distribution_is_deterministic_and_contains_no_private_data(tmp_path):
     assert paths[0].read_bytes() == paths[1].read_bytes()
     with tarfile.open(paths[0]) as archive:
         names=[member.name for member in archive]
-        assert any(name.endswith('/scripts/install_linux.py') for name in names)
-        assert not any(any(part in name for part in ('HANDOFF','roadmap/','.git/','.venv','auth.json','usage.db')) for name in names)
-        assert not any(name.endswith('.jsonl') or '/tests/test_' in name for name in names)
+    # Only the reviewed allowlist is published; anything else is a leak.
+    expected=['TokenMeter-linux/'+name for name in installer.source_files()+['scripts/build_linux_archive.py']]
+    assert names == expected
+    assert not any(name.endswith('.jsonl') or '/tests/test_' in name for name in names)
 
 
 def test_distribution_excludes_unreviewed_local_files(tmp_path):

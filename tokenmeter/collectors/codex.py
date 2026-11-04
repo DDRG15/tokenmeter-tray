@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -158,10 +159,16 @@ def event_from_record(
 
 
 def _window(raw: object) -> dict | None:
-    """Copies only the three fields of a limit window."""
+    """Copies only the three numeric fields of a limit window; anything else is None."""
     if not isinstance(raw, dict):
         return None
-    return {k: raw.get(k) for k in ("used_percent", "window_minutes", "resets_at")}
+    return {k: _finite(raw.get(k)) for k in ("used_percent", "window_minutes", "resets_at")}
+
+
+def _finite(value: object) -> float | int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def load_rate_limits(store: Store) -> dict | None:
@@ -397,7 +404,7 @@ class CodexCollector(Collector):
             "primary": _window(rate.get("primary")),
             "secondary": _window(rate.get("secondary")),
             "credits": {
-                "has_credits": bool(credits.get("has_credits")) if isinstance(credits, dict) else False
+                "has_credits": isinstance(credits, dict) and credits.get("has_credits") is True
             },
         }
         self._store.set_state(STATE_RATE_LIMITS, json.dumps(snapshot))

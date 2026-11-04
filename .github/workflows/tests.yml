@@ -6,7 +6,6 @@ on:
 
 jobs:
   windows:
-    if: ${{ !startsWith(github.ref_name, 'linux/') && !startsWith(github.head_ref, 'linux/') }}
     # Existing Windows release: tray, work area and WebView2 integration.
     runs-on: windows-latest
     timeout-minutes: 30

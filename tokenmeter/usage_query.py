@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import math
 from pathlib import Path
+import re
 import time
 
 from .collectors.codex import CodexCollector, load_rate_limits
@@ -11,6 +13,43 @@ from .collectors.transcripts import TranscriptCollector
 from .dashboard import _models
 from .history import daily_series, summarize
 from .store import Store, Totals
+
+
+# Model and plan names are written by whatever produced a local record. The MCP
+# caller is a language model, so free text from those records must not reach it
+# as instructions or as an unbounded payload.
+_IDENTIFIER = re.compile(r"[A-Za-z0-9._:/@+<>\[\]-]{1,64}")
+UNRECOGNIZED = "unrecognized"
+
+
+def _identifier(value, empty=""):
+    if value in (None, ""):
+        return empty
+    return value if isinstance(value, str) and _IDENTIFIER.fullmatch(value) else UNRECOGNIZED
+
+
+def _number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _limits(raw):
+    """Rebuilds Codex limits with only identifiers and finite numbers."""
+    if not raw:
+        return None
+    windows = {}
+    for name in ("primary", "secondary"):
+        window = raw.get(name)
+        windows[name] = ({k: _number(window.get(k))
+                          for k in ("used_percent", "window_minutes", "resets_at")}
+                         if isinstance(window, dict) else None)
+    credits = raw.get("credits")
+    return {"captured_ts": _number(raw.get("captured_ts")),
+            "plan_type": _identifier(raw.get("plan_type")),
+            **windows,
+            "credits": {"has_credits": bool(isinstance(credits, dict)
+                                            and credits.get("has_credits") is True)}}
 
 
 class _UnknownBilling:
@@ -75,7 +114,9 @@ class UsageQuery:
         self._filters(provider, source)
         now = time.time() if now is None else now
         with self.snapshot() as (store, status):
-            rows = store.totals_by_model(now - hours * 3600, provider, source)
+            rows = [replace(row, model=_identifier(row.model, UNRECOGNIZED),
+                            plan=_identifier(row.plan))
+                    for row in store.totals_by_model(now - hours * 3600, provider, source)]
             totals = Totals(**{name: sum(getattr(row, name) for row in rows)
                                for name in Totals.__dataclass_fields__})
             models, cost, billing = _models(rows)
@@ -87,7 +128,7 @@ class UsageQuery:
                 "models": models, "model_groups": len(rows),
                 "models_truncated": len(models) < len(rows),
                 "api_equivalent": cost, "billing": billing,
-                "codex_limits": load_rate_limits(store) if provider != "anthropic"
+                "codex_limits": _limits(load_rate_limits(store)) if provider != "anthropic"
                                  and source != "transcript" else None,
                 "collectors": status, "observed_only": True,
                 "billing_note": "Credentials are never read; billing may be unknown. "
