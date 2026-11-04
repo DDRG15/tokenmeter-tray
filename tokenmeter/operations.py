@@ -12,7 +12,12 @@ from .files import output_destination
 def save_export(app, path, days=30, *, provider="", source="", format="json"):
     """Write a consistent filtered export atomically, protecting live app files."""
     body, _, _ = export_usage(app, days, provider=provider, source=source, format=format)
-    destination = output_destination(path, app.store.path)
+    return write_export(body, path, app.store.path)
+
+
+def write_export(body, path, protected_db):
+    """Atomically write an export, refusing TokenMeter's own data files."""
+    destination = output_destination(path, protected_db)
     fd, name = tempfile.mkstemp(prefix="export-", suffix=".tmp", dir=destination.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
