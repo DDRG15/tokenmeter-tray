@@ -134,6 +134,7 @@ def _windows_app(tmp_path):
     app.root = _Root()
     app.tray = SimpleNamespace(update=lambda snap: None)
     app.panel = SimpleNamespace(visible=False)
+    app._refresh_ui = lambda: None  # App method; the fixture is a bare RuntimeState
     return app
 
 
