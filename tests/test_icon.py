@@ -44,7 +44,7 @@ def test_text_flips_with_the_taskbar_theme():
     def has_near(img, target, tol=40):
         return any(
             all(abs(px[i] - target[i]) <= tol for i in range(3)) and px[3] > 200
-            for px in img.getdata()
+            for px in img.get_flattened_data()
         )
 
     assert has_near(dark, TEXT_ON_DARK), "on a dark taskbar the number is light"
@@ -67,7 +67,7 @@ def test_sizes_render_without_error():
 def test_idle_icon_differs_from_zero_percent():
     idle = render_icon(0, size=64, has_activity=False)
     active = render_icon(0, size=64, has_activity=True)
-    assert list(idle.getdata()) != list(active.getdata())
+    assert list(idle.get_flattened_data()) != list(active.get_flattened_data())
 
 
 def snapshot(percent=35.0, has_activity=True, inp=1234, out=5678):

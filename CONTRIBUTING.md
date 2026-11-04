@@ -96,6 +96,9 @@ The checkout, Python setup and artifact upload actions are all v6 and declare
 Node.js 24. Their official manifests are
 linked in [the README](README.md#continuous-integration). The action runtime
 does not change the app's Python version or require a local Node.js install.
+The workflow token is read-only. A `dependency-audit` job checks every pinned
+requirements file with `pip-audit`; a pin with a published advisory fails CI, so
+update the pin (and its transitive pins) rather than ignoring the advisory.
 
 Before pushing, review `git diff --check`, `git diff --stat` and the staged
 diff. Include the tests and documentation needed for the change. Publish only
