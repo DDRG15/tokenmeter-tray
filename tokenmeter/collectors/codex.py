@@ -47,6 +47,10 @@ log = logging.getLogger(__name__)
 
 STATE_RATE_LIMITS = "codex_rate_limits"
 
+# How many of the newest rollouts outside the window are searched for the
+# plan's limits (a bucket without windows, like `premium`, carries none).
+LIMITS_FALLBACK_FILES = 5
+
 # Byte pre-filter: almost all lines are messages and tool calls, and parsing
 # their JSON is the bulk of a backfill's cost.
 _MARKERS = (b'"turn_context"', b'"token_usage_record"', b'"rate_limits"')
@@ -229,32 +233,61 @@ class CodexCollector(Collector):
         added = 0
         files = 0
         oldest = None
+        skipped: list[tuple[float, Path]] = []
         for path in self._rollouts():
+            mtime = None
+            if self.modified_since is not None or self._covered_until is None:
+                try:
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    pass
+            # The oldest file on disk anchors the coverage, so it counts even
+            # when the file is skipped below.
+            if self._covered_until is None and mtime is not None:
+                oldest = mtime if oldest is None else min(oldest, mtime)
             if self.modified_since is not None:
                 # On-demand readers skip files nobody wrote to since the cutoff:
                 # an event inside the window cannot live only in such a file.
-                try:
-                    if path.stat().st_mtime < self.modified_since:
-                        continue
-                except OSError:
+                if mtime is None:
+                    continue
+                if mtime < self.modified_since:
+                    skipped.append((mtime, path))
                     continue
             files += 1
-            if self._covered_until is None:
-                try:
-                    mtime = path.stat().st_mtime
-                    oldest = mtime if oldest is None else min(oldest, mtime)
-                except OSError:
-                    pass
             try:
                 added += self._read_new(path)
             except OSError as exc:
                 # File locked or deleted midway: retried on the next cycle.
                 self.stats.last_error = f"{path.name}: {exc}"
+        if skipped:
+            self._limits_from_skipped(skipped)
         self.stats.files_seen = files
         now = time.time()
         self.stats.last_scan_ts = now
         self._mark_coverage(oldest, now)
         return added
+
+    def _limits_from_skipped(self, skipped: list[tuple[float, Path]]) -> None:
+        """Real limits when no file inside the window carried them.
+
+        The plan's limits are a snapshot, not a windowed count: the latest one
+        stays meaningful (the caller flags it as expired once its reset passed)
+        however long ago the session ended. So the newest skipped rollouts are
+        read for their `rate_limits` only, never for events, until one has
+        windows.
+        """
+        stored = load_rate_limits(self._store)
+        if stored is not None and (stored.get("primary") or stored.get("secondary")):
+            return
+        for _, path in sorted(skipped, key=lambda item: item[0], reverse=True)[:LIMITS_FALLBACK_FILES]:
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            _, limits = self._digest(data, _FileContext(), emit=False, limits=True)
+            if limits:
+                self._save_rate_limits(limits)
+                return
 
     def _mark_coverage(self, oldest: float | None, now: float) -> None:
         """Coverage of what the rollouts on disk guarantee.
@@ -322,9 +355,11 @@ class CodexCollector(Collector):
         return added
 
     def _digest(
-        self, data: bytes, ctx: _FileContext, emit: bool
+        self, data: bytes, ctx: _FileContext, emit: bool, limits: bool = False
     ) -> tuple[list[UsageEvent], list[tuple[float, dict]]]:
         """Processes complete lines. With `emit=False` it only updates `ctx`.
+
+        `limits=True` also collects the `rate_limits` without emitting events.
 
         Two passes: the `plan_type` may appear (in a `token_count`) after the
         record that has to be tagged in the same batch, and a turn may have been
@@ -332,7 +367,7 @@ class CodexCollector(Collector):
         events are built.
         """
         records: list[dict] = []
-        limits: list[tuple[float, dict]] = []
+        found: list[tuple[float, dict]] = []
         for raw in data.split(b"\n"):
             if not raw.strip():
                 continue
@@ -370,8 +405,8 @@ class CodexCollector(Collector):
                 # the last `premium` overwrote the good data with empty windows.
                 has_window = isinstance(rate.get("primary"), dict) or isinstance(
                     rate.get("secondary"), dict)
-                if emit and ts is not None and has_window:
-                    limits.append((ts, rate))
+                if (emit or limits) and ts is not None and has_window:
+                    found.append((ts, rate))
 
         events: list[UsageEvent] = []
         if records:
@@ -385,7 +420,7 @@ class CodexCollector(Collector):
                 event = event_from_record(obj, model, billing, plan)
                 if event is not None:
                     events.append(event)
-        return events, limits
+        return events, found
 
     # -- real limits --------------------------------------------------------
 

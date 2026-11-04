@@ -7,7 +7,10 @@ app was closed, and the history drew 0 on those days.
 from __future__ import annotations
 
 import os
+import time
 from datetime import date, datetime, timedelta
+
+import pytest
 
 from tokenmeter.collectors.transcripts import TranscriptCollector
 from tokenmeter.history import daily_series, local_midnight
@@ -123,3 +126,23 @@ def test_transcripts_cover_from_the_oldest_file_on_disk(tmp_path):
     TranscriptCollector(store, root).scan_once()
     (start, _end), = store.coverage_between(0, 2 * NOW)
     assert start == five_ago
+
+
+@pytest.mark.parametrize("cutoff_days_ago", [None, 1])
+def test_files_skipped_by_the_cutoff_still_anchor_the_coverage(tmp_path, cutoff_days_ago):
+    root = tmp_path / "projects"
+    root.mkdir()
+    old, new = root / "old.jsonl", root / "new.jsonl"
+    old.write_text("", encoding="utf-8")
+    new.write_text("", encoding="utf-8")
+    five_ago = time.time() - 5 * 86400
+    os.utime(old, (five_ago, five_ago))
+
+    store = Store(tmp_path / "u.db")
+    collector = TranscriptCollector(store, root)
+    if cutoff_days_ago is not None:
+        collector.modified_since = time.time() - cutoff_days_ago * 86400
+    collector.scan_once()
+    assert collector.stats.files_seen == (2 if cutoff_days_ago is None else 1)
+    (start, _end), = store.coverage_between(0, time.time() + 10)
+    assert start == pytest.approx(five_ago, abs=1)
