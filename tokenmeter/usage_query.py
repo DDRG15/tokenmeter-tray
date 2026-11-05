@@ -13,7 +13,7 @@ from .collectors.codex import CodexCollector, load_rate_limits
 from .collectors.transcripts import TranscriptCollector
 from .dashboard import _models
 from .history import daily_series, summarize
-from .store import Store, Totals, merge_model_days
+from .store import CLOCK_TOLERANCE_S, Store, Totals, merge_model_days
 
 
 # Model and plan names are written by whatever produced a local record. The MCP
@@ -24,9 +24,6 @@ UNRECOGNIZED = "unrecognized"
 # A file last written before the window started cannot hold an event inside it;
 # the margin absorbs clock skew between a record's timestamp and its write.
 SCAN_MARGIN_S = 3600
-# Records stamped slightly after `now` (rounding, a just-written line) still
-# count; anything further ahead is a wrong clock or a hostile record.
-CLOCK_TOLERANCE_S = 60
 SCOPE_NOTE = ("Rolling hours over usage files currently on disk. It does not apply the "
               "desktop app's start-fresh floor, retention or manual session reset, and "
               "cannot see transcripts already removed from disk.")

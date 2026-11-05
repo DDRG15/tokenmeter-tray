@@ -94,6 +94,17 @@ def test_undated_records_are_visible_in_the_status_text_and_the_health_list(tmp_
     assert "undated" not in app.sources_text()
 
 
+def test_a_future_event_does_not_enter_the_desktop_totals(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000, "now")
+    call(app, 5_000_000, "future", ts=time.time() + 3600)
+    state = dashboard.build_state(app)
+    assert state["tokens"]["calls"] == 1
+    assert state["tokens"]["input"] == 1_000
+    assert app.session.snapshot().totals.calls == 1
+    assert app.store.last_event_ts() < time.time()
+
+
 def test_calls_without_usage_raise_a_warning(tmp_path):
     app = app_without_tk(tmp_path)
     call(app, 1_000, "a", complete=False)

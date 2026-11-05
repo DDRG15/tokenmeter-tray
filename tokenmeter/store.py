@@ -33,6 +33,11 @@ def scope_sql(scope: str | None) -> str:
 # Two observations separated by less than this are considered continuous. It
 # covers the 2 s transcript polling with margin for the machine pausing.
 COVERAGE_GAP = 300.0
+# Records stamped slightly after "now" (rounding, a just-written line) still
+# count; anything further ahead is a wrong clock or a hostile record. Every
+# aggregate that feeds a meter or a total stops here, so a single bad
+# timestamp cannot open a window in the future or inflate a figure.
+CLOCK_TOLERANCE_S = 60.0
 STATE_COVERAGE_FLOOR = "coverage_floor_ts"
 
 SCHEMA = """
@@ -130,6 +135,11 @@ class ModelTotals(Totals):
     # are different rows, because only one of them is money spent.
     billing: str = "unknown"
     plan: str = ""
+
+
+def _upper_bound(until_ts: float | None) -> float:
+    """Newest timestamp an aggregate may include: `until_ts`, else now plus the tolerance."""
+    return time.time() + CLOCK_TOLERANCE_S if until_ts is None else until_ts
 
 
 @dataclass(frozen=True)
@@ -374,17 +384,19 @@ class Store:
             COUNT(*)                             AS calls,
             COALESCE(SUM(1 - usage_complete), 0) AS incomplete_calls"""
 
-    def totals_since(self, since_ts: float, scope: str | None = None) -> Totals:
+    def totals_since(self, since_ts: float, scope: str | None = None,
+                     until_ts: float | None = None) -> Totals:
+        until = _upper_bound(until_ts)
         with self._lock:
             row = self._conn.execute(
                 f"SELECT {self._AGG_COLS} FROM usage_events "
-                f"WHERE ts >= ? AND {scope_sql(scope)}", (since_ts,)
+                f"WHERE ts >= ? AND ts <= ? AND {scope_sql(scope)}", (since_ts, until)
             ).fetchone()
         return Totals(**{k: int(row[k]) for k in row.keys()})
 
     def totals_by_model(self, since_ts: float, provider: str = "", source: str = "",
                         until_ts: float | None = None) -> list[ModelTotals]:
-        until = float("inf") if until_ts is None else until_ts
+        until = _upper_bound(until_ts)
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT model, provider, billing, plan, {self._AGG_COLS}
@@ -419,7 +431,7 @@ class Store:
         and `date.today()` cut them. Costs are computed from this split so each
         day is priced at the rates in force that day.
         """
-        until = float("inf") if until_ts is None else until_ts
+        until = _upper_bound(until_ts)
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT model, provider, billing, plan,
@@ -459,9 +471,10 @@ class Store:
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT date(ts, 'unixepoch', 'localtime') AS day, {self._AGG_COLS}
-                    FROM usage_events WHERE ts >= ? AND (?='' OR provider=?) AND (?='' OR source=?)
+                    FROM usage_events WHERE ts >= ? AND ts <= ?
+                      AND (?='' OR provider=?) AND (?='' OR source=?)
                     GROUP BY day ORDER BY day""",
-                (since_ts, provider, provider, source, source),
+                (since_ts, _upper_bound(None), provider, provider, source, source),
             ).fetchall()
         return {
             r["day"]: Totals(**{k: int(r[k]) for k in r.keys() if k != "day"})
@@ -477,8 +490,9 @@ class Store:
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT source, COUNT(*) AS n FROM usage_events WHERE ts >= ? GROUP BY source",
-                (since_ts,),
+                "SELECT source, COUNT(*) AS n FROM usage_events WHERE ts >= ? AND ts <= ? "
+                "GROUP BY source",
+                (since_ts, _upper_bound(None)),
             ).fetchall()
         return {r["source"]: int(r["n"]) for r in rows}
 
@@ -486,25 +500,29 @@ class Store:
         """Only the ts column, in ascending order. Used by the window calculation."""
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT ts FROM usage_events WHERE ts >= ? AND {scope_sql(scope)} "
-                "ORDER BY ts ASC", (since_ts,)
+                f"SELECT ts FROM usage_events WHERE ts >= ? AND ts <= ? AND {scope_sql(scope)} "
+                "ORDER BY ts ASC", (since_ts, _upper_bound(None))
             ).fetchall()
         return [float(r["ts"]) for r in rows]
 
     def first_event_ts_after(self, since_ts: float) -> float | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT MIN(ts) AS t FROM usage_events WHERE ts >= ?", (since_ts,)
+                "SELECT MIN(ts) AS t FROM usage_events WHERE ts >= ? AND ts <= ?",
+                (since_ts, _upper_bound(None))
             ).fetchone()
         return float(row["t"]) if row and row["t"] is not None else None
 
     def last_event_ts(self, source: str | None = None) -> float | None:
         with self._lock:
             if source is None:
-                row = self._conn.execute("SELECT MAX(ts) AS t FROM usage_events").fetchone()
+                row = self._conn.execute(
+                    "SELECT MAX(ts) AS t FROM usage_events WHERE ts <= ?",
+                    (_upper_bound(None),)).fetchone()
             else:
                 row = self._conn.execute(
-                    "SELECT MAX(ts) AS t FROM usage_events WHERE source = ?", (source,)
+                    "SELECT MAX(ts) AS t FROM usage_events WHERE source = ? AND ts <= ?",
+                    (source, _upper_bound(None))
                 ).fetchone()
         return float(row["t"]) if row and row["t"] is not None else None
 
