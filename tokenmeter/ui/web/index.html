@@ -1007,7 +1007,7 @@ const Demo = (() => {
     const models = has ? modelsFor(D.io, D.calls) : [];
     const ago = Math.round((Date.now() - D.lastCall) / 1000);
     return legacy({
-      version: '0.1.0', now_ts: Date.now() / 1000,
+      version: '1.0.0', now_ts: Date.now() / 1000,
       session: {
         has_activity: has, percent: pct, used, budget, basis: D.flags.basis_all ? 'all' : 'io',
         window_hours: 5, window_seconds: 18000, remaining_seconds: D.rem, countdown: hms(D.rem),
