@@ -81,6 +81,19 @@ def test_percent_level_and_models(tmp_path):
     assert state["cost"]["text"].endswith("(partial)")
 
 
+def test_undated_records_are_visible_in_the_status_text_and_the_health_list(tmp_path):
+    from types import SimpleNamespace
+    app = app_without_tk(tmp_path)
+    app.transcripts = SimpleNamespace(
+        paused=False, running=True,
+        stats=SimpleNamespace(last_error="", events_undated=3, last_scan_ts=time.time(), files_seen=1))
+    assert "3 undated skipped" in app.sources_text()
+    health = dashboard.build_health(app, time.time())
+    assert [c["events_undated"] for c in health if c["name"] == "Claude Code"] == [3]
+    app.transcripts.stats.events_undated = 0
+    assert "undated" not in app.sources_text()
+
+
 def test_calls_without_usage_raise_a_warning(tmp_path):
     app = app_without_tk(tmp_path)
     call(app, 1_000, "a", complete=False)

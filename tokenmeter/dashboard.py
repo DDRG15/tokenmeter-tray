@@ -345,7 +345,8 @@ def build_health(app, now: float) -> list[dict]:
         health.append({"name": title, "state": state, "error": failed,
                        "last_scan_age": max(0, now-seen) if seen else None,
                        "files": getattr(stats, "files_seen", None),
-                       "missing_usage": getattr(stats, "missing_usage", 0)})
+                       "missing_usage": getattr(stats, "missing_usage", 0),
+                       "events_undated": getattr(stats, "events_undated", 0)})
     return health
 
 

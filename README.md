@@ -568,6 +568,11 @@ The proxy also says whether it ever received anything:
 | `proxy port 8787 BUSY` | Another process uses the port: change `proxy_port` and your tools' URLs and restart TokenMeter, or free that port |
 | `proxy :8787 0 (last used 3 d ago)` | It used to receive and stopped: check the environment variable |
 
+A transcript line or Codex record with no readable timestamp is never counted:
+TokenMeter does not guess a date for it. The footer then adds `N undated
+skipped` (the count since startup), and the collector list in the window shows the
+same number next to the collector that skipped them.
+
 If you start TokenMeter in the middle of a session already under way, it recovers
 the whole session: the transcript reader does a full sweep at startup and then
 follows every 2 seconds.

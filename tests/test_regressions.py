@@ -205,7 +205,8 @@ def test_rescan_respects_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr("tokenmeter.collectors.transcripts.CachedBilling.get",lambda self:("unknown",""))
     root = tmp_path/"projects"
     root.mkdir()
-    (root/"a.jsonl").write_text(json.dumps({"type":"assistant","requestId":"x",
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    (root/"a.jsonl").write_text(json.dumps({"type":"assistant","requestId":"x","timestamp":stamp,
         "message":{"model":"m","usage":{"input_tokens":10,"output_tokens":2}}})+"\n",encoding="utf-8")
     assert rescan(Config(transcripts_root=str(root),billing_overrides={"anthropic":"api"})) == 0
     s = Store(tmp_path/"usage.db")

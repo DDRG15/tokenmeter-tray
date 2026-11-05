@@ -233,6 +233,21 @@ def test_oversized_or_negative_counts_do_not_stop_the_scan(tmp_path):
     assert summary["totals"]["output_tokens"] == MAX_COUNT + 2
 
 
+def test_collector_status_reports_undated_records(tmp_path):
+    now = time.time()
+    root = tmp_path / "claude"
+    root.mkdir()
+    undated = json.loads(_claude_line("undated", now - 60))
+    del undated["timestamp"]
+    (root / "s.jsonl").write_text(_claude_line("dated", now - 60) + json.dumps(undated) + "\n")
+    query = UsageQuery(root, None)
+    summary = query.summary(now=now)
+    assert summary["totals"]["calls"] == 1
+    assert summary["collectors"]["transcript"]["events_undated"] == 1
+    assert query.status()["collectors"]["transcript"]["events_undated"] == 1
+    assert summary["collectors"]["codex"]["events_undated"] == 0
+
+
 def test_window_excludes_future_events_and_declares_its_scope(tmp_path):
     now = time.time()
     root = tmp_path / "claude"

@@ -30,6 +30,9 @@ class TranscriptStats:
     lines_read: int = 0
     events_new: int = 0
     events_duplicate: int = 0
+    # Usage lines whose timestamp is missing or unparseable. They are never
+    # stored: inventing a date would put the tokens in the wrong window.
+    events_undated: int = 0
     last_scan_ts: float = 0.0
     last_error: str = ""
 
@@ -65,19 +68,29 @@ def parse_timestamp(raw: object) -> float | None:
 
 def event_from_line(line: str) -> UsageEvent | None:
     """Converts a transcript line into a `UsageEvent`, or None if it does not apply."""
+    return parse_line(line)[0]
+
+
+def parse_line(line: str) -> tuple[UsageEvent | None, bool]:
+    """(event, undated) for a transcript line.
+
+    `undated` is True when the line is a countable call in every other respect
+    but carries no usable timestamp. Such a call is not turned into an event:
+    a made-up date would charge its tokens to whatever window is open now.
+    """
     try:
         obj = json.loads(line)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+        return None, False
     if not isinstance(obj, dict) or obj.get("type") != "assistant":
-        return None
+        return None, False
 
     message = obj.get("message")
     if not isinstance(message, dict):
-        return None
+        return None, False
     usage = message.get("usage")
     if not isinstance(usage, dict):
-        return None
+        return None, False
 
     def num(key: str) -> int:
         value = usage.get(key)
@@ -91,8 +104,6 @@ def event_from_line(line: str) -> UsageEvent | None:
     if isinstance(creation, dict):
         write_1h = bounded_count(creation.get("ephemeral_1h_input_tokens"))
 
-    ts = parse_timestamp(obj.get("timestamp")) or time.time()
-
     request_id = obj.get("requestId")
     message_id = message.get("id")
     if isinstance(request_id, str) and request_id:
@@ -102,7 +113,12 @@ def event_from_line(line: str) -> UsageEvent | None:
     elif isinstance(message_id, str) and message_id:
         dedupe_key = f"msg:{message_id}"
     else:
-        return None  # without an identifier it cannot be deduplicated; better not to count it
+        return None, False  # without an identifier it cannot be deduplicated; better not to count it
+
+    # `is None`, not falsy: a parsed 0.0 (the Unix epoch) is a real timestamp.
+    ts = parse_timestamp(obj.get("timestamp"))
+    if ts is None:
+        return None, True
 
     return UsageEvent(
         ts=ts,
@@ -120,7 +136,7 @@ def event_from_line(line: str) -> UsageEvent | None:
             f"req:{request_id}" if isinstance(request_id, str) and request_id else None,
             f"msg:{message_id}" if isinstance(message_id, str) and message_id else None,
         ) if k),
-    )
+    ), False
 
 
 class TranscriptCollector(Collector):
@@ -256,7 +272,9 @@ class TranscriptCollector(Collector):
             # Discarding them avoids parsing their JSON.
             if b'"usage"' not in raw or b'"assistant"' not in raw:
                 continue
-            event = event_from_line(raw.decode("utf-8", errors="replace"))
+            event, undated = parse_line(raw.decode("utf-8", errors="replace"))
+            if undated:
+                self.stats.events_undated += 1
             if event is not None:
                 batch.append(event)
 

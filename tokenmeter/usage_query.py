@@ -101,7 +101,8 @@ class UsageQuery:
             status = {}
             for source, (root, factory) in readers.items():
                 item = {"enabled": root is not None, "state": "disabled",
-                        "files": 0, "records": 0, "read_error": False}
+                        "files": 0, "records": 0, "events_undated": 0,
+                        "read_error": False}
                 status[source] = item
                 if root is None:
                     continue
@@ -115,6 +116,7 @@ class UsageQuery:
                     reader.modified_since = modified_since
                     item["records"] = reader.scan_once()
                     item["files"] = reader.stats.files_seen
+                    item["events_undated"] = reader.stats.events_undated
                     item["read_error"] = bool(reader.stats.last_error)
                     item["state"] = "error" if item["read_error"] else "ready"
                 except Exception:

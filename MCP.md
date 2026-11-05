@@ -17,7 +17,7 @@ MCP protocol and is independent of GTK, Tk and WebView2.
 |---|---|---|
 | `get_usage_summary` | Normalized tokens/cache, models and API-equivalent estimates | `hours` (1–2160, default 5), optional `provider`, `source` |
 | `get_usage_history` | Daily usage with unknown/partial coverage | `days` (7, 30, 90), `basis` (`io` or `all`), optional filters |
-| `get_collector_status` | Source availability, record/file counts and read errors | none |
+| `get_collector_status` | Source availability, record/file counts, undated-record counts and read errors | none |
 
 Provider filters: empty, `anthropic`, `openai`. Source filters: empty,
 `transcript` (Claude Code), `codex`. Tools cannot change source paths or settings,
@@ -40,6 +40,11 @@ removed from disk, so it can differ from the desktop panel; `window.scope_note`
 says so in every response. Records stamped more than a minute in the future are
 excluded. History days are local calendar days of the server process;
 `utc_offset_seconds` reports that offset.
+
+A usage record whose timestamp is missing or unparseable is never counted: the
+server does not guess a date for it. Each source reports how many such records
+it skipped in `events_undated` (under `collectors` in every tool response); a
+value above zero means the totals leave those calls out.
 
 Credentials are never read. Claude billing stays unknown; Codex can use plan
 metadata in its usage records. An API equivalent is an estimate rather than

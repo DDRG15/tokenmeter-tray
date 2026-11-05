@@ -11,6 +11,7 @@ from tokenmeter.collectors.codex import (
     default_codex_root,
     event_from_record,
     load_rate_limits,
+    parse_record,
     read_auth_mode,
 )
 from tokenmeter.collectors.transcripts import parse_timestamp
@@ -238,6 +239,41 @@ def test_reads_both_folders(env):
     write(rollout_dir(root, "sessions") / "rollout-a.jsonl", [context(), record("resp_s")])
     write(rollout_dir(root, "archived_sessions") / "rollout-b.jsonl", [context(), record("resp_a")])
     assert CodexCollector(store, root).scan_once() == 2
+
+
+def test_undated_records_are_not_stored_and_are_counted(env):
+    """A missing or unparseable timestamp must not become "now"."""
+    root, store = env
+    missing = json.loads(record("resp_missing"))
+    del missing["timestamp"]
+    write(rollout_dir(root) / "rollout-a.jsonl", [
+        context(),
+        record("resp_ok"),
+        json.dumps(missing),
+        record("resp_null", ts=None),
+        record("resp_garbage", ts="not a date"),
+    ])
+    collector = CodexCollector(store, root)
+    assert collector.scan_once() == 1
+    assert collector.stats.events_undated == 3
+    assert list(rows(store)) == ["codex:resp_ok"]
+
+
+def test_a_record_that_would_not_count_anyway_is_not_reported_as_undated():
+    no_id = json.loads(record(resp=None))
+    del no_id["timestamp"]
+    assert parse_record(no_id, "m", BILLING_UNKNOWN, "") == (None, False)
+    undated = json.loads(record("resp_1"))
+    del undated["timestamp"]
+    event, flagged = parse_record(undated, "m", BILLING_UNKNOWN, "")
+    assert event is None and flagged is True
+
+
+def test_epoch_zero_is_a_real_timestamp_not_a_missing_one(env):
+    """`0.0` is falsy; `or` would have replaced it with the current time."""
+    event = event_from_record(json.loads(record("resp_0", ts="1970-01-01T00:00:00Z")),
+                              "m", BILLING_UNKNOWN, "")
+    assert event is not None and event.ts == 0.0
 
 
 # -- incremental reading ------------------------------------------------------------------

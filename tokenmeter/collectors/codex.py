@@ -68,6 +68,9 @@ class CodexStats:
     lines_read: int = 0
     events_new: int = 0
     events_duplicate: int = 0
+    # Usage records whose timestamp is missing or unparseable. They are never
+    # stored: inventing a date would put the tokens in the wrong window.
+    events_undated: int = 0
     last_scan_ts: float = 0.0
     last_error: str = ""
 
@@ -116,15 +119,27 @@ def event_from_record(
     obj: dict, model: str, billing: str, plan: str
 ) -> UsageEvent | None:
     """Converts a `token_usage_record` into a `UsageEvent`, or None if it does not apply."""
+    return parse_record(obj, model, billing, plan)[0]
+
+
+def parse_record(
+    obj: dict, model: str, billing: str, plan: str
+) -> tuple[UsageEvent | None, bool]:
+    """(event, undated) for a `token_usage_record`.
+
+    `undated` is True when the record is countable in every other respect but
+    carries no usable timestamp. Such a record is not turned into an event: a
+    made-up date would charge its tokens to whatever window is open now.
+    """
     payload = obj.get("payload")
     if not isinstance(payload, dict):
-        return None
+        return None, False
     usage = payload.get("usage")
     response_id = payload.get("response_id")
     if not isinstance(usage, dict) or not isinstance(response_id, str) or not response_id:
-        return None  # without a response_id it cannot be deduplicated; better not to count it
+        return None, False  # without a response_id it cannot be deduplicated; better not to count it
     if "input_tokens" not in usage and "output_tokens" not in usage:
-        return None
+        return None, False
 
     total_in = _int(usage.get("input_tokens"))
     cached = _int(usage.get("cached_input_tokens"))
@@ -142,7 +157,10 @@ def event_from_record(
         cache_write = written
         net_input -= written
 
-    ts = parse_timestamp(obj.get("timestamp")) or time.time()
+    # `is None`, not falsy: a parsed 0.0 (the Unix epoch) is a real timestamp.
+    ts = parse_timestamp(obj.get("timestamp"))
+    if ts is None:
+        return None, True
     return UsageEvent(
         ts=ts,
         provider="openai",
@@ -157,7 +175,7 @@ def event_from_record(
         usage_complete=True,
         billing=billing,
         plan=plan,
-    )
+    ), False
 
 
 def _window(raw: object) -> dict | None:
@@ -417,7 +435,9 @@ class CodexCollector(Collector):
             for obj in records:
                 turn_id = obj["payload"].get("turn_id")
                 model = ctx.models.get(turn_id, "") if isinstance(turn_id, str) else ""
-                event = event_from_record(obj, model, billing, plan)
+                event, undated = parse_record(obj, model, billing, plan)
+                if undated:
+                    self.stats.events_undated += 1
                 if event is not None:
                     events.append(event)
         return events, found
