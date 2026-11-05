@@ -34,6 +34,21 @@ class TranscriptStats:
     last_error: str = ""
 
 
+# SQLite stores 64-bit integers and `SUM()` raises "integer overflow" past
+# 2**63 - 1, which would abort every aggregate query over the table. The cap is
+# per count, so it also has to leave room for many rows: at 2**40 (about 1.1e12,
+# far above any real call) it takes 2**63 / 2**40 = 2**23 (about 8.4 M) rows at
+# the cap before a column sum can overflow.
+MAX_COUNT = 2**40
+
+
+def bounded_count(value: object) -> int:
+    """A token count from a record: a non-negative int, 0 when absent or malformed."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return min(max(0, value), MAX_COUNT)
+
+
 def parse_timestamp(raw: object) -> float | None:
     """`2026-08-12T15:33:17.376Z` → unix. Returns None if it cannot be parsed."""
     if not isinstance(raw, str) or not raw:
@@ -66,7 +81,7 @@ def event_from_line(line: str) -> UsageEvent | None:
 
     def num(key: str) -> int:
         value = usage.get(key)
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+        return bounded_count(value)
 
     # `cache_creation` breaks the write down by TTL. The 1-hour one costs 2x the
     # input versus 1.25x for the 5-minute one, so without this breakdown the
@@ -74,9 +89,7 @@ def event_from_line(line: str) -> UsageEvent | None:
     creation = usage.get("cache_creation")
     write_1h = 0
     if isinstance(creation, dict):
-        value = creation.get("ephemeral_1h_input_tokens")
-        if isinstance(value, int) and not isinstance(value, bool):
-            write_1h = value
+        write_1h = bounded_count(creation.get("ephemeral_1h_input_tokens"))
 
     ts = parse_timestamp(obj.get("timestamp")) or time.time()
 
@@ -150,13 +163,21 @@ class TranscriptCollector(Collector):
         files = 0
         oldest = None
         for path in sorted(self._root.glob("**/*.jsonl")):
-            files += 1
-            if self._covered_until is None:
+            mtime = None
+            if self.modified_since is not None or self._covered_until is None:
                 try:
                     mtime = path.stat().st_mtime
-                    oldest = mtime if oldest is None else min(oldest, mtime)
                 except OSError:
                     pass
+            # The oldest file on disk anchors the coverage, so it counts even
+            # when the file is skipped below.
+            if self._covered_until is None and mtime is not None:
+                oldest = mtime if oldest is None else min(oldest, mtime)
+            if self.modified_since is not None and (mtime is None or mtime < self.modified_since):
+                # On-demand readers skip files nobody wrote to since the cutoff:
+                # an event inside the window cannot live only in such a file.
+                continue
+            files += 1
             try:
                 added += self._read_new(path)
             except OSError as exc:

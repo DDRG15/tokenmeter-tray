@@ -455,6 +455,61 @@ def test_coverage_starts_at_the_oldest_file_and_reaches_now(env):
     assert end >= before
 
 
+@pytest.mark.parametrize("cutoff_days_ago", [None, 1])
+def test_files_skipped_by_the_cutoff_still_anchor_the_coverage(env, cutoff_days_ago):
+    root, store = env
+    old = install_fixture(root, dest="rollout-old.jsonl")
+    install_fixture(root, dest="rollout-new.jsonl")
+    five_ago = time.time() - 5 * 86400
+    os.utime(old, (five_ago, five_ago))
+
+    collector = CodexCollector(store, root)
+    if cutoff_days_ago is not None:
+        collector.modified_since = time.time() - cutoff_days_ago * 86400
+    collector.scan_once()
+    assert collector.stats.files_seen == (2 if cutoff_days_ago is None else 1)
+    (start, _end), = store.coverage_between(0, time.time() + 10)
+    assert start == pytest.approx(five_ago, abs=1)
+
+
+def test_limits_come_from_the_newest_skipped_rollout_without_counting_its_events(env):
+    root, store = env
+    stale = rollout_dir(root) / "rollout-stale.jsonl"
+    write(stale, [context(), record("resp_stale"), token_count("plus", used=70.0)])
+    older = rollout_dir(root) / "rollout-older.jsonl"
+    write(older, [token_count("pro", used=5.0, ts="2024-12-31T03:00:00.000Z")])
+    now = time.time()
+    os.utime(stale, (now - 3 * 86400, now - 3 * 86400))
+    os.utime(older, (now - 4 * 86400, now - 4 * 86400))
+
+    collector = CodexCollector(store, root)
+    collector.modified_since = now - 86400
+    assert collector.scan_once() == 0
+    assert collector.stats.files_seen == 0
+    assert not rows(store)
+    assert store.get_offset(str(stale)) == (0, 0)
+    limits = load_rate_limits(store)
+    assert limits["plan_type"] == "plus" and limits["primary"]["used_percent"] == 70.0
+
+
+def test_skipped_rollouts_without_windows_do_not_hide_older_limits(env):
+    root, store = env
+    premium = {"limit_id": "premium", "primary": None, "secondary": None, "plan_type": "plus"}
+    newest = rollout_dir(root) / "rollout-newest.jsonl"
+    write(newest, [json.dumps({"timestamp": TS, "type": "event_msg",
+                               "payload": {"type": "token_count", "rate_limits": premium}})])
+    older = rollout_dir(root) / "rollout-older.jsonl"
+    write(older, [token_count("plus", used=33.0)])
+    now = time.time()
+    os.utime(newest, (now - 2 * 86400, now - 2 * 86400))
+    os.utime(older, (now - 3 * 86400, now - 3 * 86400))
+
+    collector = CodexCollector(store, root)
+    collector.modified_since = now - 86400
+    collector.scan_once()
+    assert load_rate_limits(store)["primary"]["used_percent"] == 33.0
+
+
 def test_default_codex_root_honors_codex_home(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "other"))
     assert default_codex_root() == tmp_path / "other"

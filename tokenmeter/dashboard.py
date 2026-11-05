@@ -141,12 +141,14 @@ def _models(rows) -> tuple[list[dict], dict, list[dict]]:
             "subscription_equivalent": sub.as_dict() if sub.any else dict(ZERO),
         }
         if unknown:
-            known = cost["api_spend"]
-            known["partial"] = True
-            if not api.any:
-                known["value"], known["text"] = None, "—"
-            else:
-                known["text"] += " (partial)"
+            # Unknown calls may belong to either side, so neither can claim a
+            # certain zero or a complete total.
+            for known, side in ((cost["api_spend"], api), (cost["subscription_equivalent"], sub)):
+                known["partial"] = True
+                if not side.any:
+                    known["value"], known["text"] = None, "—"
+                elif not known["text"].endswith(" (partial)"):
+                    known["text"] += " (partial)"
             cost["note"] += " · some calls have unknown billing"
     return out[:MAX_MODELS], cost, billing
 

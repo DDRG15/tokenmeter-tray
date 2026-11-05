@@ -10,10 +10,11 @@ packaging==26.2
 pefile==2024.8.26
 playwright==1.50.0
 pluggy==1.6.0
+pygments==2.21.0
 pyee==12.1.1
 pyinstaller==6.22.0
 pyinstaller-hooks-contrib==2026.6
-pytest==8.2.2
+pytest==9.0.3
 pytest-timeout==2.4.0
 pywin32-ctypes==0.2.3
-setuptools==80.9.0
+setuptools==84.1.0

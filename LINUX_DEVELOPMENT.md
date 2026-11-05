@@ -18,8 +18,9 @@ There is no Linux WebView, HTTP dashboard child, browser or system service.
 The Linux UI includes filters, history/table/chart, CSV/JSON export, backup and
 restore, manual budget, session/weekly calibration, cache basis, cost visibility,
 alerts and session reset. It uses shared parsing, history, calibration and
-protection logic. Windows lifecycle is still owned by App rather than Runtime;
-Windows release checks remain necessary after changing shared code.
+protection logic. Budget, session/weekly calibration and export writes go
+through `tokenmeter/operations.py` on both platforms. Windows lifecycle is still
+owned by App rather than Runtime, so CI runs the Windows job on every branch.
 
 Desktop notifications use only an already-running notification service with
 D-Bus NO_AUTO_START and recall their own IDs on exit. Tests inject a notifier

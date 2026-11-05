@@ -20,14 +20,14 @@ import subprocess
 import time
 import tkinter as tk
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import datetime
 from tkinter import messagebox, simpledialog, filedialog
 
+from . import operations
 from .state import RuntimeState
 from .alerts import AlertTracker
 from .anchors import AnchorError, parse_reset
-from .calibration import CalibrationError, calibrate, fit_session, measure_drift
+from .calibration import CalibrationError
 from .collectors.codex import CodexCollector
 from .collectors.proxy import ProxyCollector
 from .collectors.transcripts import TranscriptCollector
@@ -334,59 +334,18 @@ class App(RuntimeState):
         if observed is None:
             return
 
+        # Shared with the Linux shell: drift is measured before the new budget
+        # is applied, and a multi-point fit from this session refines it.
         try:
-            cal = calibrate(observed, snap.totals.basis(self.config.percent_basis), self.config.percent_basis)
+            summary = operations.calibrate_session(self, observed)
         except CalibrationError as exc:
             messagebox.showwarning("Calibrate", str(exc), parent=self.root)
             return
-
-        # How far off the current budget was. It is measured BEFORE applying the
-        # new one, which is the only moment with both a prediction and an
-        # observation.
-        drift = (
-            measure_drift(observed, snap.used_tokens, self.config.session_budget_tokens)
-            if self.config.is_calibrated
-            else None
-        )
-
-        self.store.add_calibration(
-            ts=snap.now_ts,
-            observed_percent=observed,
-            counted_tokens=snap.totals.basis(self.config.percent_basis),
-            basis=self.config.percent_basis,
-            budget_tokens=cal.budget_tokens,
-            session_start_ts=snap.start_ts,
-            predicted_percent=drift.predicted_percent if drift else None,
-            scope=self.config.percent_scope,
-        )
-
-        # With two or more points from this same session, the fit separates the
-        # real quota from the tokens the web counts and the meter does not see.
-        fit = self._fit_current_session(snap.start_ts)
-        if fit is not None and not fit.misaligned:
-            cal = replace(cal, budget_tokens=fit.budget_tokens)
-
-        self.config.apply_calibration(cal)
-        self.config.calibrated_session_start = snap.start_ts
-        self.config.calibrated_scope = self.config.percent_scope
-        self.config.calibrated_unseen_tokens = (fit.unseen_tokens if fit is not None and not fit.misaligned else 0)
-        self.config.save()
-
-        parts = [cal.summary()]
-        if drift is not None:
-            parts.append(drift.summary())
-        if fit is not None:
-            parts.append(fit.summary())
-        messagebox.showinfo("Calibrated", "\n\n".join(parts), parent=self.root)
+        messagebox.showinfo("Calibrated", summary, parent=self.root)
 
         self.tray.update(self.snapshot())
         if self.panel.visible:
             self.panel.refresh()
-
-    def _fit_current_session(self, session_start_ts: float):
-        rows = self.store.calibrations_for_session(session_start_ts, self.config.percent_basis,
-                                                   self.config.percent_scope)
-        return fit_session([(r["counted_tokens"], r["observed_percent"]) for r in rows])
 
 
     def _ask_weekly(self) -> None:
@@ -431,14 +390,11 @@ class App(RuntimeState):
             return
 
         try:
-            cal = calibrate(observed, snap.used_tokens, self.config.percent_basis)
+            summary = operations.calibrate_week(self, observed)
         except CalibrationError as exc:
             messagebox.showwarning("Weekly window", str(exc), parent=self.root)
             return
-
-        self.config.apply_weekly_calibration(cal)
-        self.config.save()
-        messagebox.showinfo("Weekly window", cal.summary(), parent=self.root)
+        messagebox.showinfo("Weekly window", summary, parent=self.root)
         self._refresh_ui()
 
     def _refresh_ui(self) -> None:
@@ -458,9 +414,7 @@ class App(RuntimeState):
             maxvalue=1_000_000_000,
         )
         if value:
-            self.config.invalidate_calibration(weekly=False)
-            self.config.session_budget_tokens = value
-            self.config.save()
+            operations.set_budget(self, value)
             self.tray.update(self.snapshot())
             if self.panel.visible:
                 self.panel.refresh()
@@ -490,10 +444,7 @@ class App(RuntimeState):
             messagebox.showerror("Backup", str(exc), parent=self.root)
 
     def _export(self, options: dict) -> None:
-        from pathlib import Path
-        import tempfile
         from .exports import export_usage
-        from .files import output_destination
 
         format = "csv" if options["action"] == "export_csv" else "json"
         try:
@@ -504,14 +455,7 @@ class App(RuntimeState):
                 filetypes=[(format.upper(), "*."+format)])
             if not path:
                 return
-            target = output_destination(path, self.store.path)
-            fd, name = tempfile.mkstemp(prefix="export-", suffix=".tmp", dir=target.parent)
-            try:
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(body)
-                os.replace(name, target)
-            finally:
-                Path(name).unlink(missing_ok=True)
+            operations.write_export(body, path, self.store.path)
             messagebox.showinfo("Export", "File saved with the selected filters.", parent=self.root)
         except Exception as exc:
             messagebox.showerror("Export", str(exc), parent=self.root)

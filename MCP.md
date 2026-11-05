@@ -29,6 +29,17 @@ aggregation with the existing parsers/deduplication and closes that database.
 It does not read or modify an installed TokenMeter database. It does not poll
 in the background or include proxy-only calls. It reads usage records, not web
 conversations. A gap without usage records is unknown, not measured zero.
+Queries run one at a time. A summary or history query skips files not modified
+since its window started (with a one-hour margin), so short windows stay fast
+on large histories; `get_collector_status` still counts every file.
+
+A summary window is rolling hours ending now (`window.kind` is `rolling`), over
+the files currently on disk. It does not apply the desktop app's start-fresh
+floor, retention or manual session reset, and cannot see transcripts already
+removed from disk, so it can differ from the desktop panel; `window.scope_note`
+says so in every response. Records stamped more than a minute in the future are
+excluded. History days are local calendar days of the server process;
+`utc_offset_seconds` reports that offset.
 
 Credentials are never read. Claude billing stays unknown; Codex can use plan
 metadata in its usage records. An API equivalent is an estimate rather than
@@ -37,7 +48,11 @@ message bodies, request/response IDs, credentials or source paths in tool output
 Model and plan names come from local records, so they are returned only when
 they look like identifiers (letters, digits and `._:/@+-<>[]`, up to 64
 characters); any other value becomes `unrecognized`. Codex limit fields are
-returned only as finite numbers; anything else becomes `null`.
+returned only as finite numbers; anything else becomes `null`. A Codex window
+whose reset time has passed is marked `expired: true` and its `used_percent` is
+`null`, because it no longer describes current usage. When some calls have
+unknown billing, both the API spend and the subscription equivalent are partial,
+never a certain zero.
 Read errors appear as source status, without echoing private exception contents.
 
 ## Standalone environment

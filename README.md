@@ -671,10 +671,18 @@ and the resulting percentage.
 
 ## Continuous integration
 
-The [Windows workflow](.github/workflows/tests.yml) runs on pushes and pull
-requests, installs the pinned development requirements with Python 3.12, runs
-the source tests, builds `dist/TokenMeter.exe`, tests the packaged window and
-proxy, and uploads the **TokenMeter** artifact.
+The [workflow](.github/workflows/tests.yml) runs on every push and pull request
+with Python 3.12 and a read-only token. Its jobs:
+
+- `windows`: installs the pinned development requirements, runs the source
+  tests, builds `dist/TokenMeter.exe`, tests the packaged window and proxy, and
+  uploads the **TokenMeter** artifact.
+- `linux-ui`: GTK desktop, installer and browser tests in a private virtual
+  display and D-Bus session (see [LINUX_DEVELOPMENT.md](LINUX_DEVELOPMENT.md)).
+- `mcp-linux`: the optional MCP server in its own environment
+  (see [MCP.md](MCP.md)).
+- `dependency-audit`: `pip-audit` over every pinned requirements file; a pin
+  with a published advisory fails the run.
 
 Its actions use Node.js 24: `actions/checkout@v6`,
 `actions/setup-python@v6` and `actions/upload-artifact@v6`. Node.js is supplied

@@ -120,6 +120,71 @@ def test_export_cannot_replace_configuration(tmp_path, monkeypatch, format):
         app.store.close()
 
 
+class _Root:
+    def deiconify(self):
+        pass
+
+    def withdraw(self):
+        pass
+
+
+def _windows_app(tmp_path):
+    from types import SimpleNamespace
+    app = app_without_tk(tmp_path)
+    app.root = _Root()
+    app.tray = SimpleNamespace(update=lambda snap: None)
+    app.panel = SimpleNamespace(visible=False)
+    app._refresh_ui = lambda: None  # App method; the fixture is a bare RuntimeState
+    return app
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows App imports tkinter")
+def test_windows_app_uses_the_shared_runtime_state():
+    import tokenmeter.app as app_module
+    from tokenmeter.state import RuntimeState
+    assert issubclass(app_module.App, RuntimeState)
+    for name in ("snapshot", "sources_text", "calibration_health", "weekly_origin"):
+        assert getattr(app_module.App, name) is getattr(RuntimeState, name)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows App imports tkinter")
+def test_windows_dialogs_delegate_to_shared_operations(tmp_path, monkeypatch):
+    import tokenmeter.app as app_module
+    from tokenmeter import operations
+    app = _windows_app(tmp_path)
+    calls = []
+    def spy(name):
+        real = getattr(operations, name)
+        def wrapper(*args, **kwargs):
+            calls.append(name)
+            return real(*args, **kwargs)
+        monkeypatch.setattr(operations, name, wrapper)
+    for name in ("set_budget", "calibrate_week", "write_export"):
+        spy(name)
+    shown = []
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *args, **_: shown.append(args))
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **_: shown.append(args))
+    try:
+        monkeypatch.setattr(app_module.simpledialog, "askinteger", lambda *a, **k: 5000)
+        app_module.App._ask_budget(app)
+        assert app.config.session_budget_tokens == 5000
+
+        add(app.store, "week", ts=time.time() - 60)
+        monkeypatch.setattr(app_module.simpledialog, "askstring", lambda *a, **k: "24")
+        monkeypatch.setattr(app_module.simpledialog, "askfloat", lambda *a, **k: 50.0)
+        app_module.App._ask_weekly(app)
+        assert app.config.weekly_budget_tokens == 240
+
+        target = tmp_path / "usage.json"
+        monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **_: str(target))
+        app_module.App._export(app, {"action": "export_json", "days": 7})
+        assert json.loads(target.read_text(encoding="utf-8"))
+        assert calls == ["set_budget", "calibrate_week", "write_export"]
+        assert shown[-1][0] == "Export"
+    finally:
+        app.store.close()
+
+
 def test_restore_rollback_if_second_file_replacement_fails(tmp_path,monkeypatch):
     home = tmp_path/"home"
     home.mkdir()

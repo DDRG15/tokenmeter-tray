@@ -354,14 +354,17 @@ class Store:
             ).fetchone()
         return Totals(**{k: int(row[k]) for k in row.keys()})
 
-    def totals_by_model(self, since_ts: float, provider: str = "", source: str = "") -> list[ModelTotals]:
+    def totals_by_model(self, since_ts: float, provider: str = "", source: str = "",
+                        until_ts: float | None = None) -> list[ModelTotals]:
+        until = float("inf") if until_ts is None else until_ts
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT model, provider, billing, plan, {self._AGG_COLS}
-                    FROM usage_events WHERE ts >= ? AND (?='' OR provider=?) AND (?='' OR source=?)
+                    FROM usage_events WHERE ts >= ? AND ts <= ?
+                      AND (?='' OR provider=?) AND (?='' OR source=?)
                     GROUP BY model, provider, billing, plan
                     ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC""",
-                (since_ts, provider, provider, source, source),
+                (since_ts, until, provider, provider, source, source),
             ).fetchall()
         return [
             ModelTotals(

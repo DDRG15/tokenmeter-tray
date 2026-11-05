@@ -10,6 +10,9 @@ log = logging.getLogger(__name__)
 
 class Collector:
     name = "collector"
+    # Desktop collectors watch everything; an on-demand reader may set a cutoff
+    # and skip files whose modification time is older.
+    modified_since: float | None = None
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None

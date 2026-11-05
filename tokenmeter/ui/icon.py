@@ -77,9 +77,12 @@ def state_color(percent: float, warn: int = 60, danger: int = 85) -> tuple[int, 
 
 @lru_cache(maxsize=32)
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    # The label is only digits, "!" or "–": no shaping is needed. The basic
+    # layout avoids Pillow's bundled raqm/HarfBuzz, which corrupts glyph sizes
+    # when GTK has already loaded the system HarfBuzz into the same process.
     for name in FONT_CANDIDATES:
         try:
-            return ImageFont.truetype(name, size)
+            return ImageFont.truetype(name, size, layout_engine=ImageFont.Layout.BASIC)
         except OSError:
             continue
     return ImageFont.load_default(size=size)

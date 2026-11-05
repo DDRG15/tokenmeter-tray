@@ -4,7 +4,32 @@ on:
   push:
   pull_request:
 
+# Tests only read the repository; artifact upload uses its own job token scope.
+permissions:
+  contents: read
+
 jobs:
+  dependency-audit:
+    # Every pinned manifest is checked against published advisories, so a
+    # vulnerable pin fails CI instead of shipping.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Audit tool
+        run: python -m pip install pip-audit==2.9.0
+      - name: Known vulnerabilities in pinned requirements
+        run: |
+          for manifest in requirements.txt requirements-dev.txt requirements-linux.txt \
+                          requirements-linux-dev.txt requirements-mcp.txt requirements-mcp-dev.txt; do
+            echo "::group::$manifest"
+            python -m pip_audit --no-deps --disable-pip --progress-spinner off -r "$manifest"
+            echo "::endgroup::"
+          done
+
   windows:
     # Existing Windows release: tray, work area and WebView2 integration.
     runs-on: windows-latest
