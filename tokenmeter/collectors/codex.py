@@ -40,8 +40,8 @@ from ..models import (
     UsageEvent,
 )
 from ..store import Store
-from .base import Collector
-from .transcripts import bounded_count, parse_timestamp
+from .base import Collector, bounded_count
+from .transcripts import parse_timestamp
 
 log = logging.getLogger(__name__)
 

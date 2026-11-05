@@ -19,7 +19,7 @@ from pathlib import Path
 from ..billing import CachedBilling, apply_override
 from ..models import UsageEvent
 from ..store import Store
-from .base import Collector
+from .base import MAX_COUNT, Collector, bounded_count  # noqa: F401 - MAX_COUNT stays importable from here
 
 log = logging.getLogger(__name__)
 
@@ -35,21 +35,6 @@ class TranscriptStats:
     events_undated: int = 0
     last_scan_ts: float = 0.0
     last_error: str = ""
-
-
-# SQLite stores 64-bit integers and `SUM()` raises "integer overflow" past
-# 2**63 - 1, which would abort every aggregate query over the table. The cap is
-# per count, so it also has to leave room for many rows: at 2**40 (about 1.1e12,
-# far above any real call) it takes 2**63 / 2**40 = 2**23 (about 8.4 M) rows at
-# the cap before a column sum can overflow.
-MAX_COUNT = 2**40
-
-
-def bounded_count(value: object) -> int:
-    """A token count from a record: a non-negative int, 0 when absent or malformed."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        return 0
-    return min(max(0, value), MAX_COUNT)
 
 
 def parse_timestamp(raw: object) -> float | None:
