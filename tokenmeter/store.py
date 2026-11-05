@@ -33,6 +33,11 @@ def scope_sql(scope: str | None) -> str:
 # Two observations separated by less than this are considered continuous. It
 # covers the 2 s transcript polling with margin for the machine pausing.
 COVERAGE_GAP = 300.0
+# Records stamped slightly after "now" (rounding, a just-written line) still
+# count; anything further ahead is a wrong clock or a hostile record. Every
+# aggregate that feeds a meter or a total stops here, so a single bad
+# timestamp cannot open a window in the future or inflate a figure.
+CLOCK_TOLERANCE_S = 60.0
 STATE_COVERAGE_FLOOR = "coverage_floor_ts"
 
 SCHEMA = """
@@ -130,6 +135,39 @@ class ModelTotals(Totals):
     # are different rows, because only one of them is money spent.
     billing: str = "unknown"
     plan: str = ""
+
+
+def _upper_bound(until_ts: float | None) -> float:
+    """Newest timestamp an aggregate may include: `until_ts`, else now plus the tolerance."""
+    return time.time() + CLOCK_TOLERANCE_S if until_ts is None else until_ts
+
+
+@dataclass(frozen=True)
+class ModelDayTotals(ModelTotals):
+    """One model's totals for a single LOCAL day (`YYYY-MM-DD`).
+
+    A price can change on a given date (a promotional rate ends), so the cost of
+    a model over a range is only right when each day is priced on its own.
+    """
+
+    day: str = ""
+
+
+def merge_model_days(parts: "Iterable[ModelDayTotals]") -> list[ModelTotals]:
+    """Collapses per-day rows into one row per (model, provider, billing, plan).
+
+    Ordered by input + output tokens, largest first, like `totals_by_model`.
+    """
+    sums: dict[tuple[str, str, str, str], dict[str, int]] = {}
+    for part in parts:
+        acc = sums.setdefault((part.model, part.provider, part.billing, part.plan),
+                              dict.fromkeys(Totals.__dataclass_fields__, 0))
+        for name in acc:
+            acc[name] += getattr(part, name)
+    merged = [ModelTotals(model=key[0], provider=key[1], billing=key[2], plan=key[3], **acc)
+              for key, acc in sums.items()]
+    merged.sort(key=lambda row: row.io_tokens, reverse=True)
+    return merged
 
 
 class Store:
@@ -346,17 +384,19 @@ class Store:
             COUNT(*)                             AS calls,
             COALESCE(SUM(1 - usage_complete), 0) AS incomplete_calls"""
 
-    def totals_since(self, since_ts: float, scope: str | None = None) -> Totals:
+    def totals_since(self, since_ts: float, scope: str | None = None,
+                     until_ts: float | None = None) -> Totals:
+        until = _upper_bound(until_ts)
         with self._lock:
             row = self._conn.execute(
                 f"SELECT {self._AGG_COLS} FROM usage_events "
-                f"WHERE ts >= ? AND {scope_sql(scope)}", (since_ts,)
+                f"WHERE ts >= ? AND ts <= ? AND {scope_sql(scope)}", (since_ts, until)
             ).fetchone()
         return Totals(**{k: int(row[k]) for k in row.keys()})
 
     def totals_by_model(self, since_ts: float, provider: str = "", source: str = "",
                         until_ts: float | None = None) -> list[ModelTotals]:
-        until = float("inf") if until_ts is None else until_ts
+        until = _upper_bound(until_ts)
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT model, provider, billing, plan, {self._AGG_COLS}
@@ -383,7 +423,45 @@ class Store:
             for r in rows
         ]
 
-    def daily_totals(self, since_ts: float, provider: str = "", source: str = "") -> dict[str, Totals]:
+    def totals_by_model_day(self, since_ts: float, provider: str = "", source: str = "",
+                            until_ts: float | None = None) -> list[ModelDayTotals]:
+        """Like `totals_by_model`, split by LOCAL day.
+
+        Days are cut in SQLite with `localtime`, the same place `daily_totals`
+        and `date.today()` cut them. Costs are computed from this split so each
+        day is priced at the rates in force that day.
+        """
+        until = _upper_bound(until_ts)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT model, provider, billing, plan,
+                           date(ts, 'unixepoch', 'localtime') AS day, {self._AGG_COLS}
+                    FROM usage_events WHERE ts >= ? AND ts <= ?
+                      AND (?='' OR provider=?) AND (?='' OR source=?)
+                    GROUP BY model, provider, billing, plan, day
+                    ORDER BY day""",
+                (since_ts, until, provider, provider, source, source),
+            ).fetchall()
+        return [
+            ModelDayTotals(
+                model=r["model"],
+                provider=r["provider"],
+                billing=r["billing"],
+                plan=r["plan"],
+                day=r["day"],
+                input_tokens=int(r["input_tokens"]),
+                output_tokens=int(r["output_tokens"]),
+                cache_write_tokens=int(r["cache_write_tokens"]),
+                cache_read_tokens=int(r["cache_read_tokens"]),
+                cache_write_1h_tokens=int(r["cache_write_1h_tokens"]),
+                calls=int(r["calls"]),
+                incomplete_calls=int(r["incomplete_calls"]),
+            )
+            for r in rows
+        ]
+
+    def daily_totals(self, since_ts: float, provider: str = "", source: str = "",
+                     until_ts: float | None = None) -> dict[str, Totals]:
         """Aggregates per LOCAL day (`YYYY-MM-DD`) since `since_ts`.
 
         Grouping is done in SQLite with `localtime`, which uses the same system
@@ -394,9 +472,10 @@ class Store:
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT date(ts, 'unixepoch', 'localtime') AS day, {self._AGG_COLS}
-                    FROM usage_events WHERE ts >= ? AND (?='' OR provider=?) AND (?='' OR source=?)
+                    FROM usage_events WHERE ts >= ? AND ts <= ?
+                      AND (?='' OR provider=?) AND (?='' OR source=?)
                     GROUP BY day ORDER BY day""",
-                (since_ts, provider, provider, source, source),
+                (since_ts, _upper_bound(until_ts), provider, provider, source, source),
             ).fetchall()
         return {
             r["day"]: Totals(**{k: int(r[k]) for k in r.keys() if k != "day"})
@@ -412,8 +491,9 @@ class Store:
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT source, COUNT(*) AS n FROM usage_events WHERE ts >= ? GROUP BY source",
-                (since_ts,),
+                "SELECT source, COUNT(*) AS n FROM usage_events WHERE ts >= ? AND ts <= ? "
+                "GROUP BY source",
+                (since_ts, _upper_bound(None)),
             ).fetchall()
         return {r["source"]: int(r["n"]) for r in rows}
 
@@ -421,25 +501,29 @@ class Store:
         """Only the ts column, in ascending order. Used by the window calculation."""
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT ts FROM usage_events WHERE ts >= ? AND {scope_sql(scope)} "
-                "ORDER BY ts ASC", (since_ts,)
+                f"SELECT ts FROM usage_events WHERE ts >= ? AND ts <= ? AND {scope_sql(scope)} "
+                "ORDER BY ts ASC", (since_ts, _upper_bound(None))
             ).fetchall()
         return [float(r["ts"]) for r in rows]
 
-    def first_event_ts_after(self, since_ts: float) -> float | None:
+    def first_event_ts_after(self, since_ts: float, until_ts: float | None = None) -> float | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT MIN(ts) AS t FROM usage_events WHERE ts >= ?", (since_ts,)
+                "SELECT MIN(ts) AS t FROM usage_events WHERE ts >= ? AND ts <= ?",
+                (since_ts, _upper_bound(until_ts))
             ).fetchone()
         return float(row["t"]) if row and row["t"] is not None else None
 
     def last_event_ts(self, source: str | None = None) -> float | None:
         with self._lock:
             if source is None:
-                row = self._conn.execute("SELECT MAX(ts) AS t FROM usage_events").fetchone()
+                row = self._conn.execute(
+                    "SELECT MAX(ts) AS t FROM usage_events WHERE ts <= ?",
+                    (_upper_bound(None),)).fetchone()
             else:
                 row = self._conn.execute(
-                    "SELECT MAX(ts) AS t FROM usage_events WHERE source = ?", (source,)
+                    "SELECT MAX(ts) AS t FROM usage_events WHERE source = ? AND ts <= ?",
+                    (source, _upper_bound(None))
                 ).fetchone()
         return float(row["t"]) if row and row["t"] is not None else None
 

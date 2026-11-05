@@ -13,7 +13,7 @@ from .collectors.codex import CodexCollector, load_rate_limits
 from .collectors.transcripts import TranscriptCollector
 from .dashboard import _models
 from .history import daily_series, summarize
-from .store import Store, Totals
+from .store import CLOCK_TOLERANCE_S, Store, Totals, merge_model_days
 
 
 # Model and plan names are written by whatever produced a local record. The MCP
@@ -24,9 +24,6 @@ UNRECOGNIZED = "unrecognized"
 # A file last written before the window started cannot hold an event inside it;
 # the margin absorbs clock skew between a record's timestamp and its write.
 SCAN_MARGIN_S = 3600
-# Records stamped slightly after `now` (rounding, a just-written line) still
-# count; anything further ahead is a wrong clock or a hostile record.
-CLOCK_TOLERANCE_S = 60
 SCOPE_NOTE = ("Rolling hours over usage files currently on disk. It does not apply the "
               "desktop app's start-fresh floor, retention or manual session reset, and "
               "cannot see transcripts already removed from disk.")
@@ -101,7 +98,8 @@ class UsageQuery:
             status = {}
             for source, (root, factory) in readers.items():
                 item = {"enabled": root is not None, "state": "disabled",
-                        "files": 0, "records": 0, "read_error": False}
+                        "files": 0, "records": 0, "events_undated": 0,
+                        "read_error": False}
                 status[source] = item
                 if root is None:
                     continue
@@ -115,6 +113,7 @@ class UsageQuery:
                     reader.modified_since = modified_since
                     item["records"] = reader.scan_once()
                     item["files"] = reader.stats.files_seen
+                    item["events_undated"] = reader.stats.events_undated
                     item["read_error"] = bool(reader.stats.last_error)
                     item["state"] = "error" if item["read_error"] else "ready"
                 except Exception:
@@ -144,13 +143,14 @@ class UsageQuery:
         now = time.time() if now is None else now
         since = now - hours * 3600
         with self.snapshot(since - SCAN_MARGIN_S) as (store, status):
-            rows = [replace(row, model=_identifier(row.model, UNRECOGNIZED),
-                            plan=_identifier(row.plan))
-                    for row in store.totals_by_model(since, provider, source,
-                                                     until_ts=now + CLOCK_TOLERANCE_S)]
+            day_rows = [replace(row, model=_identifier(row.model, UNRECOGNIZED),
+                                plan=_identifier(row.plan))
+                        for row in store.totals_by_model_day(since, provider, source,
+                                                             until_ts=now + CLOCK_TOLERANCE_S)]
+            rows = merge_model_days(day_rows)
             totals = Totals(**{name: sum(getattr(row, name) for row in rows)
                                for name in Totals.__dataclass_fields__})
-            models, cost, billing = _models(rows)
+            models, cost, billing = _models(day_rows)
             return {
                 "window": {"hours": hours, "since_ts": since, "until_ts": now,
                            "kind": "rolling", "scope_note": SCOPE_NOTE},
@@ -173,7 +173,8 @@ class UsageQuery:
         if basis not in ("io", "all"):
             raise ValueError("basis must be io or all")
         self._filters(provider, source)
-        cutoff = (time.time() if now is None else now) - (days + 1) * 86400 - SCAN_MARGIN_S
+        now = time.time() if now is None else now
+        cutoff = now - (days + 1) * 86400 - SCAN_MARGIN_S
         with self.snapshot(cutoff) as (store, status):
             bars = daily_series(store, days, basis, now=now, provider=provider, source=source)
             summary = asdict(summarize(bars))
@@ -186,9 +187,9 @@ class UsageQuery:
                           "calls": b.calls, "coverage": b.coverage,
                           "incomplete_calls": b.incomplete_calls} for b in bars],
                 "summary": summary, "collectors": status, "observed_only": True,
-                # Days are local calendar days of the process running this server.
-                "utc_offset_seconds": -(time.altzone if time.localtime().tm_isdst > 0
-                                        else time.timezone),
+                # Days are local calendar days of the process running this server;
+                # the offset is the one in force at the query's `now`, not today's.
+                "utc_offset_seconds": time.localtime(now).tm_gmtoff,
                 "coverage_note": "A gap is unknown, not zero; this server does not watch continuously.",
             }
 

@@ -1,7 +1,10 @@
+import json
 from pathlib import Path
 
 import pytest
 
+
+from tokenmeter.collectors.base import MAX_COUNT
 from tokenmeter.collectors.parsers import UsageSink, looks_like_completion
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -164,6 +167,51 @@ def test_malformed_body_never_raises():
     sink = UsageSink("anthropic", path="/v1/messages", content_type="application/json")
     ev = run_sink(sink, b"<html>502 Bad Gateway</html>")
     assert ev is not None and ev.usage_complete is False
+
+
+def test_oversized_and_negative_counts_are_clamped():
+    """A broken or hostile response must not put an unbounded number in the store."""
+    body = json.dumps({"id": "msg_x", "model": "claude-opus-5", "usage": {
+        "input_tokens": 10**30, "output_tokens": -7,
+        "cache_creation_input_tokens": 2**63,
+        "cache_read_input_tokens": MAX_COUNT + 1,
+        "cache_creation": {"ephemeral_1h_input_tokens": -1}}}).encode()
+    sink = UsageSink("anthropic", path="/v1/messages", content_type="application/json")
+    ev = run_sink(sink, body)
+    assert ev.input_tokens == MAX_COUNT
+    assert ev.output_tokens == 0
+    assert ev.cache_write_tokens == MAX_COUNT
+    assert ev.cache_read_tokens == MAX_COUNT
+    assert ev.cache_write_1h_tokens == 0
+
+
+def test_clamping_covers_the_openai_and_google_shapes_and_still_rejects_bools():
+    openai = json.dumps({"id": "chatcmpl-1", "model": "m", "usage": {
+        "prompt_tokens": 10**30, "completion_tokens": -5,
+        "prompt_tokens_details": {"cached_tokens": 3}}}).encode()
+    ev = run_sink(UsageSink("openai", path="/v1/chat/completions",
+                            content_type="application/json"), openai)
+    assert ev.input_tokens == MAX_COUNT - 3
+    assert ev.output_tokens == 0
+    assert ev.cache_read_tokens == 3
+
+    google = json.dumps({"modelVersion": "gemini-x", "usageMetadata": {
+        "promptTokenCount": 10, "candidatesTokenCount": 10**30}}).encode()
+    ev = run_sink(UsageSink("google", path="/v1beta/models/gemini-x:generateContent",
+                            content_type="application/json"), google)
+    assert ev.output_tokens == MAX_COUNT
+
+    flagged = json.dumps({"id": "msg_b", "model": "claude-opus-5",
+                          "usage": {"input_tokens": True, "output_tokens": 5}}).encode()
+    ev = run_sink(UsageSink("anthropic", path="/v1/messages",
+                            content_type="application/json"), flagged)
+    assert ev.input_tokens == 0 and ev.output_tokens == 5
+
+
+def test_max_count_is_still_importable_from_the_transcript_reader():
+    from tokenmeter.collectors import base, transcripts
+    assert transcripts.MAX_COUNT is base.MAX_COUNT
+    assert transcripts.bounded_count is base.bounded_count
 
 
 def test_error_response_from_provider_is_flagged_incomplete():

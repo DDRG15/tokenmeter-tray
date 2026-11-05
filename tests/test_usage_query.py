@@ -233,6 +233,86 @@ def test_oversized_or_negative_counts_do_not_stop_the_scan(tmp_path):
     assert summary["totals"]["output_tokens"] == MAX_COUNT + 2
 
 
+def test_collector_status_reports_undated_records(tmp_path):
+    now = time.time()
+    root = tmp_path / "claude"
+    root.mkdir()
+    undated = json.loads(_claude_line("undated", now - 60))
+    del undated["timestamp"]
+    (root / "s.jsonl").write_text(_claude_line("dated", now - 60) + json.dumps(undated) + "\n")
+    query = UsageQuery(root, None)
+    summary = query.summary(now=now)
+    assert summary["totals"]["calls"] == 1
+    assert summary["collectors"]["transcript"]["events_undated"] == 1
+    assert query.status()["collectors"]["transcript"]["events_undated"] == 1
+    assert summary["collectors"]["codex"]["events_undated"] == 0
+
+
+def _sonnet5_line(key, ts):
+    line = json.loads(_claude_line(key, ts, input_tokens=1_000_000, output_tokens=0))
+    line["message"]["model"] = "claude-sonnet-5"
+    line["message"]["usage"] = {"input_tokens": 1_000_000, "output_tokens": 0}
+    return json.dumps(line) + "\n"
+
+
+def test_summary_prices_each_local_day_at_that_days_rates(tmp_path):
+    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    noon = lambda *ymd: datetime(*ymd, 12).timestamp()  # local time, like the day grouping
+    root = tmp_path / "claude"
+    root.mkdir()
+    (root / "s.jsonl").write_text(_sonnet5_line("last_intro_day", noon(2026, 8, 31))
+                                  + _sonnet5_line("first_full_price_day", noon(2026, 9, 1)))
+    summary = UsageQuery(root, None).summary(hours=72, now=noon(2026, 9, 2))
+    assert summary["totals"]["calls"] == 2
+    assert summary["api_equivalent"]["value"] == pytest.approx(5.0)
+    assert summary["model_groups"] == 1
+    assert summary["models"][0]["calls"] == 2
+
+
+def test_summary_leaves_an_unknown_model_unpriced(tmp_path):
+    now = time.time()
+    root = tmp_path / "claude"
+    root.mkdir()
+    (root / "s.jsonl").write_text(_claude_line("one", now - 60))
+    summary = UsageQuery(root, None).summary(now=now)
+    assert summary["models"][0]["cost"] is None
+    assert summary["api_equivalent"]["value"] is None
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching TZ needs time.tzset (POSIX)")
+def test_history_reports_the_utc_offset_in_force_at_the_query_time(tmp_path, monkeypatch):
+    """New York is UTC-5 in January and UTC-4 in July, whatever today is."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        root = tmp_path / "claude"
+        root.mkdir()
+        query = UsageQuery(root, None)
+        winter = datetime(2026, 1, 15, 12, tzinfo=timezone.utc).timestamp()
+        summer = datetime(2026, 7, 15, 12, tzinfo=timezone.utc).timestamp()
+        assert query.history(now=winter)["utc_offset_seconds"] == -5 * 3600
+        assert query.history(now=summer)["utc_offset_seconds"] == -4 * 3600
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
+def test_history_excludes_future_events_like_summary(tmp_path):
+    local = lambda *args: datetime(*args).timestamp()
+    now = local(2026, 9, 2, 12)
+    root = tmp_path / "claude"
+    root.mkdir()
+    (root / "s.jsonl").write_text(_claude_line("past", local(2026, 9, 2, 11))
+                                  + _claude_line("slightly_ahead", now + 30)
+                                  + _claude_line("future", local(2026, 9, 2, 12, 30)))
+    query = UsageQuery(root, None)
+    assert query.summary(hours=24, now=now)["totals"]["calls"] == 2
+    bars = query.history(days=7, now=now)["bars"]
+    assert bars[-1]["day"] == "2026-09-02"
+    assert bars[-1]["calls"] == 2
+    assert sum(bar["calls"] or 0 for bar in bars) == 2
+
+
 def test_window_excludes_future_events_and_declares_its_scope(tmp_path):
     now = time.time()
     root = tmp_path / "claude"

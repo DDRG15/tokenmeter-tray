@@ -5,6 +5,7 @@ import pytest
 from tokenmeter.collectors.transcripts import (
     TranscriptCollector,
     event_from_line,
+    parse_line,
     parse_timestamp,
 )
 from tokenmeter.store import Store
@@ -105,6 +106,58 @@ def test_missing_ttl_breakdown_defaults_to_the_cheaper_rate():
     ev = event_from_line(assistant_line())
     assert ev.cache_write_tokens == 15505
     assert ev.cache_write_1h_tokens == 0
+
+
+def test_undated_lines_are_not_stored_and_are_counted(tmp_path):
+    """A missing or unparseable timestamp must not become "now"."""
+    root = tmp_path / "projects" / "proj"
+    root.mkdir(parents=True)
+    missing = json.loads(assistant_line(request_id="req_missing"))
+    del missing["timestamp"]
+    write(
+        root / "s.jsonl",
+        [
+            assistant_line(request_id="req_ok"),
+            json.dumps(missing),
+            assistant_line(request_id="req_null", ts=None),
+            assistant_line(request_id="req_garbage", ts="not a date"),
+            assistant_line(request_id="req_number", ts=1754840000),
+        ],
+    )
+    store = Store(tmp_path / "t.db")
+    collector = TranscriptCollector(store, tmp_path / "projects")
+    assert collector.scan_once() == 1
+    assert collector.stats.events_undated == 4
+    assert store.totals_since(0).calls == 1
+
+
+def test_a_line_that_would_not_count_anyway_is_not_reported_as_undated():
+    no_id = json.loads(assistant_line())
+    del no_id["timestamp"], no_id["requestId"], no_id["message"]["id"]
+    assert parse_line(json.dumps(no_id)) == (None, False)
+    assert parse_line(json.dumps({"type": "user", "message": {}})) == (None, False)
+    undated = json.loads(assistant_line())
+    del undated["timestamp"]
+    event, flagged = parse_line(json.dumps(undated))
+    assert event is None and flagged is True
+
+
+def test_epoch_zero_is_a_real_timestamp_not_a_missing_one():
+    """`0.0` is falsy; `or` would have replaced it with the current time."""
+    ev = event_from_line(assistant_line(ts="1970-01-01T00:00:00Z"))
+    assert ev is not None
+    assert ev.ts == 0.0
+
+
+def test_epoch_zero_is_left_to_the_stores_floor_and_retention(tmp_path):
+    root = tmp_path / "projects" / "proj"
+    root.mkdir(parents=True)
+    write(root / "s.jsonl", [assistant_line(ts="1970-01-01T00:00:00Z")])
+    store = Store(tmp_path / "t.db", retain_days=30)
+    collector = TranscriptCollector(store, tmp_path / "projects")
+    assert collector.scan_once() == 0
+    assert collector.stats.events_undated == 0
+    assert store.totals_since(0).calls == 0
 
 
 def test_non_assistant_lines_are_ignored():

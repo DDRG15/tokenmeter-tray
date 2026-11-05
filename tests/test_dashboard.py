@@ -81,6 +81,30 @@ def test_percent_level_and_models(tmp_path):
     assert state["cost"]["text"].endswith("(partial)")
 
 
+def test_undated_records_are_visible_in_the_status_text_and_the_health_list(tmp_path):
+    from types import SimpleNamespace
+    app = app_without_tk(tmp_path)
+    app.transcripts = SimpleNamespace(
+        paused=False, running=True,
+        stats=SimpleNamespace(last_error="", events_undated=3, last_scan_ts=time.time(), files_seen=1))
+    assert "3 undated skipped" in app.sources_text()
+    health = dashboard.build_health(app, time.time())
+    assert [c["events_undated"] for c in health if c["name"] == "Claude Code"] == [3]
+    app.transcripts.stats.events_undated = 0
+    assert "undated" not in app.sources_text()
+
+
+def test_a_future_event_does_not_enter_the_desktop_totals(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000, "now")
+    call(app, 5_000_000, "future", ts=time.time() + 3600)
+    state = dashboard.build_state(app)
+    assert state["tokens"]["calls"] == 1
+    assert state["tokens"]["input"] == 1_000
+    assert app.session.snapshot().totals.calls == 1
+    assert app.store.last_event_ts() < time.time()
+
+
 def test_calls_without_usage_raise_a_warning(tmp_path):
     app = app_without_tk(tmp_path)
     call(app, 1_000, "a", complete=False)
@@ -110,6 +134,55 @@ def test_history_keeps_no_record_as_null(tmp_path):
     assert 0 in tokens                  # afterwards, a day without calls is a real zero
     assert hist["bars"][-1]["today"] is True
     assert '"tokens": null' in json.dumps(hist)
+
+
+def _local_noon(year, month, day):
+    from datetime import datetime
+    return datetime(year, month, day, 12).timestamp()
+
+
+def test_history_prices_each_day_at_the_rates_of_that_day(tmp_path):
+    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    app = app_without_tk(tmp_path)
+    for key, ts in (("last-intro-day", _local_noon(2026, 8, 31)),
+                    ("first-full-price-day", _local_noon(2026, 9, 1))):
+        app.store.add_event(UsageEvent(
+            ts=ts, provider="anthropic", model="claude-sonnet-5", input_tokens=1_000_000,
+            output_tokens=0, source="transcript", dedupe_key=f"req:{key}"))
+    hist = dashboard.build_history(app, 7, now=_local_noon(2026, 9, 2))
+    # 2.00 for the 31st plus 3.00 for the 1st. Pricing the whole range with a
+    # single date would give 4.00 or 6.00.
+    assert hist["cost"]["value"] == pytest.approx(5.0)
+    (model,) = hist["models"]
+    assert model["cost"] == pytest.approx(5.0)
+    assert (model["io"], model["calls"]) == (2_000_000, 2)
+
+
+def test_a_model_without_a_price_stays_unpriced_on_every_day(tmp_path):
+    app = app_without_tk(tmp_path)
+    for key, ts in (("a", _local_noon(2026, 8, 31)), ("b", _local_noon(2026, 9, 1))):
+        app.store.add_event(UsageEvent(
+            ts=ts, provider="anthropic", model="made-up-model", input_tokens=1_000,
+            output_tokens=0, source="transcript", dedupe_key=f"req:{key}"))
+    hist = dashboard.build_history(app, 7, now=_local_noon(2026, 9, 2))
+    (model,) = hist["models"]
+    assert model["cost"] is None and model["cost_text"] == "—"
+    assert hist["cost"]["value"] is None
+
+
+def test_totals_by_model_day_splits_on_local_days_and_merges_back(tmp_path):
+    from tokenmeter.store import merge_model_days
+    app = app_without_tk(tmp_path)
+    for key, ts in (("a", _local_noon(2026, 8, 31)), ("b", _local_noon(2026, 9, 1)),
+                    ("c", _local_noon(2026, 9, 1) + 60)):
+        app.store.add_event(UsageEvent(
+            ts=ts, provider="anthropic", model="claude-sonnet-5", input_tokens=10,
+            output_tokens=1, source="transcript", dedupe_key=f"req:{key}"))
+    parts = app.store.totals_by_model_day(0)
+    assert [(p.day, p.calls) for p in parts] == [("2026-08-31", 1), ("2026-09-01", 2)]
+    (merged,) = merge_model_days(parts)
+    (flat,) = app.store.totals_by_model(0)
+    assert merged == flat
 
 
 def test_history_unknown_range_falls_back_to_30(tmp_path):

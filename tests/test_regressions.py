@@ -17,7 +17,7 @@ from tokenmeter.dashboard import _models, build_state
 from tokenmeter.history import daily_series, local_midnight
 from tokenmeter.models import UsageEvent
 from tokenmeter.session import SessionTracker
-from tokenmeter.store import Store, ModelTotals
+from tokenmeter.store import Store, ModelDayTotals
 
 
 def event(now, **kw):
@@ -182,18 +182,18 @@ def test_retention_applies_to_import_after_prune(tmp_path):
 
 
 def test_unknown_billing_cannot_be_a_certain_api_zero():
-    _, costs, _ = _models([ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1)])
+    _, costs, _ = _models([ModelDayTotals(model="claude-opus-5",day="2026-01-01",input_tokens=1000,calls=1)])
     assert costs["api_spend"]["value"] is None
     assert costs["api_spend"]["partial"] is True
 
 
 def test_unknown_billing_cannot_be_a_certain_subscription_zero():
-    _, costs, _ = _models([ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1)])
+    _, costs, _ = _models([ModelDayTotals(model="claude-opus-5",day="2026-01-01",input_tokens=1000,calls=1)])
     assert costs["subscription_equivalent"]["value"] is None
     assert costs["subscription_equivalent"]["partial"] is True
     _, mixed, _ = _models([
-        ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1,billing="subscription"),
-        ModelTotals(model="claude-opus-5",input_tokens=1000,calls=1)])
+        ModelDayTotals(model="claude-opus-5",day="2026-01-01",input_tokens=1000,calls=1,billing="subscription"),
+        ModelDayTotals(model="claude-opus-5",day="2026-01-01",input_tokens=1000,calls=1)])
     assert mixed["subscription_equivalent"]["value"] > 0
     assert mixed["subscription_equivalent"]["partial"] is True
     assert mixed["subscription_equivalent"]["text"].count("(partial)") == 1
@@ -205,7 +205,8 @@ def test_rescan_respects_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr("tokenmeter.collectors.transcripts.CachedBilling.get",lambda self:("unknown",""))
     root = tmp_path/"projects"
     root.mkdir()
-    (root/"a.jsonl").write_text(json.dumps({"type":"assistant","requestId":"x",
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    (root/"a.jsonl").write_text(json.dumps({"type":"assistant","requestId":"x","timestamp":stamp,
         "message":{"model":"m","usage":{"input_tokens":10,"output_tokens":2}}})+"\n",encoding="utf-8")
     assert rescan(Config(transcripts_root=str(root),billing_overrides={"anthropic":"api"})) == 0
     s = Store(tmp_path/"usage.db")

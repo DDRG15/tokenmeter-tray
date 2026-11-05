@@ -78,7 +78,14 @@ class RuntimeState:
 
         if not parts:
             return "no active collectors"
+        undated = self.undated_events()
+        if undated:
+            parts.append(f"{undated} undated skipped")
         return f"{'  ·  '.join(parts)}  ·  {self.sync_text()}"
+
+    def undated_events(self) -> int:
+        """Usage records skipped since startup because they carry no usable timestamp."""
+        return sum(getattr(c.stats, "events_undated", 0) for c in self._collectors())
 
     def sync_text(self) -> str:
         """Visible proof that the counter is alive and up to date."""

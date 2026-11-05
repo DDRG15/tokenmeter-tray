@@ -110,3 +110,28 @@ def test_totals_window_excludes_older_events(tmp_path):
     store.add_event(make_event(dedupe_key="new", ts=1500.0))
 
     assert store.totals_since(1000.0).calls == 1
+
+
+def test_aggregates_exclude_events_stamped_beyond_the_clock_tolerance(tmp_path):
+    """A wrong clock or a hostile record must not enter the meter's totals."""
+    import time
+
+    from tokenmeter.store import CLOCK_TOLERANCE_S
+
+    store = Store(tmp_path / "t.db")
+    now = time.time()
+    store.add_event(make_event(ts=now - 10, dedupe_key="req_now"))
+    store.add_event(make_event(ts=now + CLOCK_TOLERANCE_S / 2, dedupe_key="req_edge"))
+    store.add_event(make_event(ts=now + 3600, dedupe_key="req_future"))
+
+    assert store.totals_since(0).calls == 2
+    assert sum(r.calls for r in store.totals_by_model(0)) == 2
+    assert sum(r.calls for r in store.totals_by_model_day(0)) == 2
+    assert sum(t.calls for t in store.daily_totals(0).values()) == 2
+    assert store.calls_by_source(0) == {"proxy": 2}
+    assert len(store.event_timestamps_since(0)) == 2
+    assert store.last_event_ts() < now + 3600
+    assert store.first_event_ts_after(now + 1) == now + CLOCK_TOLERANCE_S / 2
+    # An explicit bound still wins, for callers that carry their own clock.
+    assert store.totals_since(0, until_ts=now + 7200).calls == 3
+    assert store.totals_since(0, until_ts=now - 20).calls == 0

@@ -77,9 +77,10 @@ def state_color(percent: float, warn: int = 60, danger: int = 85) -> tuple[int, 
 
 @lru_cache(maxsize=32)
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    # The label is only digits, "!" or "–": no shaping is needed. The basic
-    # layout avoids Pillow's bundled raqm/HarfBuzz, which corrupts glyph sizes
-    # when GTK has already loaded the system HarfBuzz into the same process.
+    # The label is only digits, "!" or an en dash (U+2013, drawn while there is
+    # no active session): no shaping is needed. The basic layout avoids Pillow's
+    # bundled raqm/HarfBuzz, which corrupts glyph sizes when GTK has already
+    # loaded the system HarfBuzz into the same process.
     for name in FONT_CANDIDATES:
         try:
             return ImageFont.truetype(name, size, layout_engine=ImageFont.Layout.BASIC)
@@ -90,7 +91,7 @@ def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 def _label(percent: float, has_activity: bool) -> str:
     if not has_activity:
-        return "–"
+        return "\u2013"  # en dash: no active session, so no percentage to show
     value = int(percent)
     if value >= 100:
         return "!"  # at three digits the number is unreadable; the color already shouts
