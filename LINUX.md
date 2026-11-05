@@ -15,10 +15,8 @@ The installer checks them and never installs system packages automatically.
 
 ## User installation
 
-The Linux work lives on the `linux/native-gtk` branch. Clone it explicitly:
-
 ```bash
-git clone --branch linux/native-gtk --single-branch https://github.com/DDRG15/tokenmeter-tray.git
+git clone https://github.com/DDRG15/tokenmeter-tray.git
 cd tokenmeter-tray
 /usr/bin/python3 scripts/install_linux.py
 ```

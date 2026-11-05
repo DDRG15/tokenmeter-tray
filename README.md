@@ -1,11 +1,26 @@
 # TokenMeter
 
+[![tests](https://github.com/DDRG15/tokenmeter-tray/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/DDRG15/tokenmeter-tray/actions/workflows/tests.yml)
+
 An LLM token meter for the Windows system tray and Linux Mint Cinnamon. It shows
 the active session, 5-hour countdown, weekly window, token breakdown,
 API-equivalent estimates and daily history. Windows uses its frameless dashboard;
 Linux uses native GTK 3 with Ayatana, without WebView or a browser.
 
 It works with any provider, not just Claude.
+
+- **Three sources, one count.** Claude Code transcripts, Codex sessions and a
+  local proxy for OpenAI- and Anthropic-style APIs; a call seen by both the
+  proxy and a transcript is counted once.
+- **Real limits where they exist.** Codex plan windows come from the sessions
+  themselves; Claude sessions can be calibrated against the claude.ai percentage.
+- **No invented numbers.** A model without a published price shows `—`, costs
+  are priced at the rates of the day each call was made, and records without a
+  usable timestamp are reported instead of being dated.
+- **Local by design.** Usage history lives in SQLite on the machine. The
+  optional Linux MCP server answers read-only queries over stdio.
+- **Tested on every push.** Windows, Linux GTK and MCP suites plus a
+  `pip-audit` pass over every pinned requirements file.
 
 ```mermaid
 flowchart TD
@@ -33,8 +48,7 @@ flowchart TD
 
 ## Linux desktop and optional MCP
 
-Linux installation and the Linux-only MCP are published on the
-`linux/native-gtk` branch; see the clone instructions in [LINUX.md](LINUX.md).
+Linux installation and the Linux-only MCP are described in [LINUX.md](LINUX.md).
 
 The Linux desktop and MCP serve different purposes:
 
@@ -43,7 +57,7 @@ The Linux desktop and MCP serve different purposes:
 | Desktop | Tray icon, native controls, history, exports and calibration | GTK 3 and Ayatana; see [LINUX.md](LINUX.md) |
 | Optional MCP | Read-only local usage queries from an MCP client | Separate Python environment, launched on demand over stdin/stdout; see [MCP.md](MCP.md) |
 
-The Windows desktop uses Tk and WebView2. This branch's optional MCP server
+The Windows desktop uses Tk and WebView2. The optional MCP server
 is supported only on Linux and rejects other platforms before scanning sources.
 It uses the standard MCP protocol over stdio and does not depend on either
 desktop UI. Use a separate `tokenmeter-linux-mcp` environment and a
