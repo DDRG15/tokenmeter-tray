@@ -279,6 +279,23 @@ def test_summary_leaves_an_unknown_model_unpriced(tmp_path):
     assert summary["api_equivalent"]["value"] is None
 
 
+def test_history_reports_the_utc_offset_in_force_at_the_query_time(tmp_path, monkeypatch):
+    """New York is UTC-5 in January and UTC-4 in July, whatever today is."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        root = tmp_path / "claude"
+        root.mkdir()
+        query = UsageQuery(root, None)
+        winter = datetime(2026, 1, 15, 12, tzinfo=timezone.utc).timestamp()
+        summer = datetime(2026, 7, 15, 12, tzinfo=timezone.utc).timestamp()
+        assert query.history(now=winter)["utc_offset_seconds"] == -5 * 3600
+        assert query.history(now=summer)["utc_offset_seconds"] == -4 * 3600
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
 def test_window_excludes_future_events_and_declares_its_scope(tmp_path):
     now = time.time()
     root = tmp_path / "claude"

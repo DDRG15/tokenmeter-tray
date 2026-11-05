@@ -173,7 +173,8 @@ class UsageQuery:
         if basis not in ("io", "all"):
             raise ValueError("basis must be io or all")
         self._filters(provider, source)
-        cutoff = (time.time() if now is None else now) - (days + 1) * 86400 - SCAN_MARGIN_S
+        now = time.time() if now is None else now
+        cutoff = now - (days + 1) * 86400 - SCAN_MARGIN_S
         with self.snapshot(cutoff) as (store, status):
             bars = daily_series(store, days, basis, now=now, provider=provider, source=source)
             summary = asdict(summarize(bars))
@@ -186,9 +187,9 @@ class UsageQuery:
                           "calls": b.calls, "coverage": b.coverage,
                           "incomplete_calls": b.incomplete_calls} for b in bars],
                 "summary": summary, "collectors": status, "observed_only": True,
-                # Days are local calendar days of the process running this server.
-                "utc_offset_seconds": -(time.altzone if time.localtime().tm_isdst > 0
-                                        else time.timezone),
+                # Days are local calendar days of the process running this server;
+                # the offset is the one in force at the query's `now`, not today's.
+                "utc_offset_seconds": time.localtime(now).tm_gmtoff,
                 "coverage_note": "A gap is unknown, not zero; this server does not watch continuously.",
             }
 
