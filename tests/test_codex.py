@@ -453,6 +453,77 @@ def test_an_older_rate_limits_does_not_overwrite_the_newer_one(env):
     assert limits["credits"] == {"has_credits": True}
 
 
+def windows_event(ts, primary=None, secondary=None, plan="plus"):
+    """A token_count carrying only the windows given."""
+    rate = {"limit_id": "codex", "plan_type": plan,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"}}
+    if primary is not None:
+        rate["primary"] = {"used_percent": primary, "window_minutes": 300, "resets_at": 1735714800}
+    if secondary is not None:
+        rate["secondary"] = {"used_percent": secondary, "window_minutes": 10080,
+                             "resets_at": 1736298000}
+    return json.dumps(
+        {"timestamp": ts, "type": "event_msg", "payload": {"type": "token_count", "rate_limits": rate}}
+    )
+
+
+def test_a_primary_only_update_keeps_the_still_valid_weekly_window(env):
+    root, store = env
+    f = rollout_dir(root) / "rollout-a.jsonl"
+    write(f, [windows_event("2025-01-01T05:00:00.000Z", primary=10.0, secondary=20.0)])
+    collector = CodexCollector(store, root)
+    collector.scan_once()
+
+    append(f, windows_event("2025-01-01T06:00:00.000Z", primary=30.0) + "\n")
+    collector.scan_once()
+    limits = load_rate_limits(store)
+    assert limits["captured_ts"] == parse_timestamp("2025-01-01T06:00:00.000Z")
+    assert limits["primary"]["used_percent"] == 30.0
+    assert limits["secondary"] == {"used_percent": 20.0, "window_minutes": 10080,
+                                   "resets_at": 1736298000}
+
+
+def test_a_window_that_already_reset_is_not_carried_over(env):
+    root, store = env
+    f = rollout_dir(root) / "rollout-a.jsonl"
+    write(f, [windows_event("2025-01-01T05:00:00.000Z", primary=10.0, secondary=20.0)])
+    collector = CodexCollector(store, root)
+    collector.scan_once()
+
+    # 2025-01-09 is after the stored weekly window's reset (2025-01-08).
+    append(f, windows_event("2025-01-09T00:00:00.000Z", primary=5.0) + "\n")
+    collector.scan_once()
+    limits = load_rate_limits(store)
+    assert limits["primary"]["used_percent"] == 5.0
+    assert limits["secondary"] is None
+
+
+def test_a_full_update_replaces_both_windows(env):
+    root, store = env
+    f = rollout_dir(root) / "rollout-a.jsonl"
+    write(f, [windows_event("2025-01-01T05:00:00.000Z", primary=10.0, secondary=20.0)])
+    collector = CodexCollector(store, root)
+    collector.scan_once()
+
+    append(f, windows_event("2025-01-01T06:00:00.000Z", primary=30.0, secondary=45.0) + "\n")
+    collector.scan_once()
+    limits = load_rate_limits(store)
+    assert (limits["primary"]["used_percent"], limits["secondary"]["used_percent"]) == (30.0, 45.0)
+
+
+def test_an_older_primary_only_snapshot_still_cannot_overwrite_a_newer_one(env):
+    root, store = env
+    write(rollout_dir(root) / "rollout-b.jsonl",
+          [windows_event("2025-01-01T06:00:00.000Z", primary=30.0, secondary=45.0)])
+    collector = CodexCollector(store, root)
+    collector.scan_once()
+    write(rollout_dir(root, "archived_sessions") / "rollout-c.jsonl",
+          [windows_event("2025-01-01T05:00:00.000Z", primary=1.0)])
+    collector.scan_once()
+    limits = load_rate_limits(store)
+    assert (limits["primary"]["used_percent"], limits["secondary"]["used_percent"]) == (30.0, 45.0)
+
+
 def test_load_rate_limits_with_no_data_or_garbage_returns_none(env):
     _root, store = env
     assert load_rate_limits(store) is None

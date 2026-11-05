@@ -449,7 +449,8 @@ class CodexCollector(Collector):
 
         Rollouts are read in name order, not time order, and archived ones repeat
         old sessions: without comparing by timestamp, an old file would overwrite
-        the fresh data with a stale one.
+        the fresh data with a stale one. A window the newer snapshot omits is
+        taken from the stored one while it is still valid.
         """
         ts, rate = max(limits, key=lambda item: item[0])
         stored = load_rate_limits(self._store)
@@ -459,11 +460,23 @@ class CodexCollector(Collector):
         if stored_useful and stored["captured_ts"] >= ts:
             return
         credits = rate.get("credits")
+        windows = {name: _window(rate.get(name)) for name in ("primary", "secondary")}
+        if stored_useful:
+            # A snapshot may carry only one window (a later event with just the
+            # 5 h one). The other keeps describing the plan until its own reset
+            # passes, so a still-valid stored window survives; an expired one,
+            # or one that was never stored, is dropped.
+            for name, window in windows.items():
+                kept = stored.get(name)
+                if window is None and isinstance(kept, dict):
+                    resets = _finite(kept.get("resets_at"))
+                    if resets is not None and resets > ts:
+                        windows[name] = _window(kept)
         snapshot = {
             "captured_ts": ts,
             "plan_type": rate.get("plan_type") if isinstance(rate.get("plan_type"), str) else "",
-            "primary": _window(rate.get("primary")),
-            "secondary": _window(rate.get("secondary")),
+            "primary": windows["primary"],
+            "secondary": windows["secondary"],
             "credits": {
                 "has_credits": isinstance(credits, dict) and credits.get("has_credits") is True
             },
