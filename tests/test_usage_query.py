@@ -279,6 +279,7 @@ def test_summary_leaves_an_unknown_model_unpriced(tmp_path):
     assert summary["api_equivalent"]["value"] is None
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching TZ needs time.tzset (POSIX)")
 def test_history_reports_the_utc_offset_in_force_at_the_query_time(tmp_path, monkeypatch):
     """New York is UTC-5 in January and UTC-4 in July, whatever today is."""
     monkeypatch.setenv("TZ", "America/New_York")
