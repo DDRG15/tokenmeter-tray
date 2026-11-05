@@ -2,6 +2,14 @@
 
 [![tests](https://github.com/DDRG15/tokenmeter-tray/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/DDRG15/tokenmeter-tray/actions/workflows/tests.yml)
 
+<p align="center">
+  <img src="docs/screenshot-linux.png" width="460" alt="TokenMeter overview on Linux: Claude session, token breakdown, API-equivalent cost per model, weekly usage and Codex limits">
+</p>
+
+<p align="center"><em>Linux (GTK 3) overview right after installation. The session budget and the
+weekly window are not calibrated yet, so the meter says so instead of guessing;
+models without a published price show no cost rather than an estimate.</em></p>
+
 An LLM token meter for the Windows system tray and Linux Mint Cinnamon. It shows
 the active session, 5-hour countdown, weekly window, token breakdown,
 API-equivalent estimates and daily history. Windows uses its frameless dashboard;
