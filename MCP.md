@@ -48,7 +48,8 @@ value above zero means the totals leave those calls out.
 
 Credentials are never read. Claude billing stays unknown; Codex can use plan
 metadata in its usage records. An API equivalent is an estimate rather than
-an invoice, and unknown model prices are reported as partial. There are no
+an invoice, priced one local day at a time (so a promotional rate applies only
+to the days it was in force), and unknown model prices are reported as partial. There are no
 message bodies, request/response IDs, credentials or source paths in tool output.
 Model and plan names come from local records, so they are returned only when
 they look like identifiers (letters, digits and `._:/@+-<>[]`, up to 64

@@ -125,6 +125,55 @@ def test_history_keeps_no_record_as_null(tmp_path):
     assert '"tokens": null' in json.dumps(hist)
 
 
+def _local_noon(year, month, day):
+    from datetime import datetime
+    return datetime(year, month, day, 12).timestamp()
+
+
+def test_history_prices_each_day_at_the_rates_of_that_day(tmp_path):
+    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    app = app_without_tk(tmp_path)
+    for key, ts in (("last-intro-day", _local_noon(2026, 8, 31)),
+                    ("first-full-price-day", _local_noon(2026, 9, 1))):
+        app.store.add_event(UsageEvent(
+            ts=ts, provider="anthropic", model="claude-sonnet-5", input_tokens=1_000_000,
+            output_tokens=0, source="transcript", dedupe_key=f"req:{key}"))
+    hist = dashboard.build_history(app, 7, now=_local_noon(2026, 9, 2))
+    # 2.00 for the 31st plus 3.00 for the 1st. Pricing the whole range with a
+    # single date would give 4.00 or 6.00.
+    assert hist["cost"]["value"] == pytest.approx(5.0)
+    (model,) = hist["models"]
+    assert model["cost"] == pytest.approx(5.0)
+    assert (model["io"], model["calls"]) == (2_000_000, 2)
+
+
+def test_a_model_without_a_price_stays_unpriced_on_every_day(tmp_path):
+    app = app_without_tk(tmp_path)
+    for key, ts in (("a", _local_noon(2026, 8, 31)), ("b", _local_noon(2026, 9, 1))):
+        app.store.add_event(UsageEvent(
+            ts=ts, provider="anthropic", model="made-up-model", input_tokens=1_000,
+            output_tokens=0, source="transcript", dedupe_key=f"req:{key}"))
+    hist = dashboard.build_history(app, 7, now=_local_noon(2026, 9, 2))
+    (model,) = hist["models"]
+    assert model["cost"] is None and model["cost_text"] == "—"
+    assert hist["cost"]["value"] is None
+
+
+def test_totals_by_model_day_splits_on_local_days_and_merges_back(tmp_path):
+    from tokenmeter.store import merge_model_days
+    app = app_without_tk(tmp_path)
+    for key, ts in (("a", _local_noon(2026, 8, 31)), ("b", _local_noon(2026, 9, 1)),
+                    ("c", _local_noon(2026, 9, 1) + 60)):
+        app.store.add_event(UsageEvent(
+            ts=ts, provider="anthropic", model="claude-sonnet-5", input_tokens=10,
+            output_tokens=1, source="transcript", dedupe_key=f"req:{key}"))
+    parts = app.store.totals_by_model_day(0)
+    assert [(p.day, p.calls) for p in parts] == [("2026-08-31", 1), ("2026-09-01", 2)]
+    (merged,) = merge_model_days(parts)
+    (flat,) = app.store.totals_by_model(0)
+    assert merged == flat
+
+
 def test_history_unknown_range_falls_back_to_30(tmp_path):
     assert dashboard.build_history(app_without_tk(tmp_path), 999)["days"] == 30
 

@@ -13,7 +13,7 @@ from .collectors.codex import CodexCollector, load_rate_limits
 from .collectors.transcripts import TranscriptCollector
 from .dashboard import _models
 from .history import daily_series, summarize
-from .store import Store, Totals
+from .store import Store, Totals, merge_model_days
 
 
 # Model and plan names are written by whatever produced a local record. The MCP
@@ -146,13 +146,14 @@ class UsageQuery:
         now = time.time() if now is None else now
         since = now - hours * 3600
         with self.snapshot(since - SCAN_MARGIN_S) as (store, status):
-            rows = [replace(row, model=_identifier(row.model, UNRECOGNIZED),
-                            plan=_identifier(row.plan))
-                    for row in store.totals_by_model(since, provider, source,
-                                                     until_ts=now + CLOCK_TOLERANCE_S)]
+            day_rows = [replace(row, model=_identifier(row.model, UNRECOGNIZED),
+                                plan=_identifier(row.plan))
+                        for row in store.totals_by_model_day(since, provider, source,
+                                                             until_ts=now + CLOCK_TOLERANCE_S)]
+            rows = merge_model_days(day_rows)
             totals = Totals(**{name: sum(getattr(row, name) for row in rows)
                                for name in Totals.__dataclass_fields__})
-            models, cost, billing = _models(rows)
+            models, cost, billing = _models(day_rows)
             return {
                 "window": {"hours": hours, "since_ts": since, "until_ts": now,
                            "kind": "rolling", "scope_note": SCOPE_NOTE},

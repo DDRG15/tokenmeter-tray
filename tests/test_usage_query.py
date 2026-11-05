@@ -248,6 +248,37 @@ def test_collector_status_reports_undated_records(tmp_path):
     assert summary["collectors"]["codex"]["events_undated"] == 0
 
 
+def _sonnet5_line(key, ts):
+    line = json.loads(_claude_line(key, ts, input_tokens=1_000_000, output_tokens=0))
+    line["message"]["model"] = "claude-sonnet-5"
+    line["message"]["usage"] = {"input_tokens": 1_000_000, "output_tokens": 0}
+    return json.dumps(line) + "\n"
+
+
+def test_summary_prices_each_local_day_at_that_days_rates(tmp_path):
+    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    noon = lambda *ymd: datetime(*ymd, 12).timestamp()  # local time, like the day grouping
+    root = tmp_path / "claude"
+    root.mkdir()
+    (root / "s.jsonl").write_text(_sonnet5_line("last_intro_day", noon(2026, 8, 31))
+                                  + _sonnet5_line("first_full_price_day", noon(2026, 9, 1)))
+    summary = UsageQuery(root, None).summary(hours=72, now=noon(2026, 9, 2))
+    assert summary["totals"]["calls"] == 2
+    assert summary["api_equivalent"]["value"] == pytest.approx(5.0)
+    assert summary["model_groups"] == 1
+    assert summary["models"][0]["calls"] == 2
+
+
+def test_summary_leaves_an_unknown_model_unpriced(tmp_path):
+    now = time.time()
+    root = tmp_path / "claude"
+    root.mkdir()
+    (root / "s.jsonl").write_text(_claude_line("one", now - 60))
+    summary = UsageQuery(root, None).summary(now=now)
+    assert summary["models"][0]["cost"] is None
+    assert summary["api_equivalent"]["value"] is None
+
+
 def test_window_excludes_future_events_and_declares_its_scope(tmp_path):
     now = time.time()
     root = tmp_path / "claude"

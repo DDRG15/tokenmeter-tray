@@ -527,6 +527,10 @@ the cost whenever a response includes 1-hour cache writes.
 The per-TTL breakdown comes in `usage.cache_creation`; TokenMeter reads it and
 stores it per call instead of assuming a rate.
 
+A model's cost over a range is priced one local day at a time and then summed, so
+a promotional rate applies only to the days it was in force. The number does not
+change when you look at the same days later, after the promotion has ended.
+
 ### What remains uncertain
 
 - **Prices are a dated table** (`VERIFIED_ON` in `pricing.py`, verified on

@@ -132,6 +132,34 @@ class ModelTotals(Totals):
     plan: str = ""
 
 
+@dataclass(frozen=True)
+class ModelDayTotals(ModelTotals):
+    """One model's totals for a single LOCAL day (`YYYY-MM-DD`).
+
+    A price can change on a given date (a promotional rate ends), so the cost of
+    a model over a range is only right when each day is priced on its own.
+    """
+
+    day: str = ""
+
+
+def merge_model_days(parts: "Iterable[ModelDayTotals]") -> list[ModelTotals]:
+    """Collapses per-day rows into one row per (model, provider, billing, plan).
+
+    Ordered by input + output tokens, largest first, like `totals_by_model`.
+    """
+    sums: dict[tuple[str, str, str, str], dict[str, int]] = {}
+    for part in parts:
+        acc = sums.setdefault((part.model, part.provider, part.billing, part.plan),
+                              dict.fromkeys(Totals.__dataclass_fields__, 0))
+        for name in acc:
+            acc[name] += getattr(part, name)
+    merged = [ModelTotals(model=key[0], provider=key[1], billing=key[2], plan=key[3], **acc)
+              for key, acc in sums.items()]
+    merged.sort(key=lambda row: row.io_tokens, reverse=True)
+    return merged
+
+
 class Store:
     """Concurrent access from several collector threads."""
 
@@ -372,6 +400,43 @@ class Store:
                 provider=r["provider"],
                 billing=r["billing"],
                 plan=r["plan"],
+                input_tokens=int(r["input_tokens"]),
+                output_tokens=int(r["output_tokens"]),
+                cache_write_tokens=int(r["cache_write_tokens"]),
+                cache_read_tokens=int(r["cache_read_tokens"]),
+                cache_write_1h_tokens=int(r["cache_write_1h_tokens"]),
+                calls=int(r["calls"]),
+                incomplete_calls=int(r["incomplete_calls"]),
+            )
+            for r in rows
+        ]
+
+    def totals_by_model_day(self, since_ts: float, provider: str = "", source: str = "",
+                            until_ts: float | None = None) -> list[ModelDayTotals]:
+        """Like `totals_by_model`, split by LOCAL day.
+
+        Days are cut in SQLite with `localtime`, the same place `daily_totals`
+        and `date.today()` cut them. Costs are computed from this split so each
+        day is priced at the rates in force that day.
+        """
+        until = float("inf") if until_ts is None else until_ts
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT model, provider, billing, plan,
+                           date(ts, 'unixepoch', 'localtime') AS day, {self._AGG_COLS}
+                    FROM usage_events WHERE ts >= ? AND ts <= ?
+                      AND (?='' OR provider=?) AND (?='' OR source=?)
+                    GROUP BY model, provider, billing, plan, day
+                    ORDER BY day""",
+                (since_ts, until, provider, provider, source, source),
+            ).fetchall()
+        return [
+            ModelDayTotals(
+                model=r["model"],
+                provider=r["provider"],
+                billing=r["billing"],
+                plan=r["plan"],
+                day=r["day"],
                 input_tokens=int(r["input_tokens"]),
                 output_tokens=int(r["output_tokens"]),
                 cache_write_tokens=int(r["cache_write_tokens"]),

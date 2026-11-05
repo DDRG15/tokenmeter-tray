@@ -10,8 +10,9 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import font as tkfont
 
+from ..dashboard import priced_models
 from ..history import RANGES_DAYS, bar_at, bar_layout, compact, daily_series, local_midnight, summarize
-from ..pricing import cost_usd, format_usd
+from ..pricing import format_usd
 from .icon import OK
 from .panel import BG, BG_ALT, BORDER, FG, FG_MUTED, _hex
 
@@ -176,19 +177,17 @@ class HistoryWindow:
             w.destroy()
         self._model_rows.clear()
         small = ("Segoe UI", 8)
-        rows = self._app.store.totals_by_model(since_ts)
+        # Each day is priced at the rates of that day, then summed per model.
+        rows = priced_models(self._app.store.totals_by_model_day(since_ts))
         if not rows:
             w = tk.Label(self._models, text="no activity in the range", font=small, bg=BG,
                          fg=FG_MUTED, anchor="w")
             w.grid(row=0, column=0, sticky="w")
             self._model_rows.append(w)
             return
-        for i, row in enumerate(rows[:8]):
+        for i, (row, cost) in enumerate(rows[:8]):
             text = f"{row.io_tokens:,} tok · {row.calls:,} calls"
             if self._app.config.show_cost:
-                cost = cost_usd(row.model, row.input_tokens, row.output_tokens,
-                                row.cache_write_tokens, row.cache_read_tokens,
-                                row.cache_write_1h_tokens)
                 equivalent = "—" if cost is None else format_usd(cost)
                 text += f" · API {equivalent}"
             name = tk.Label(self._models, text=row.model, font=("Segoe UI", 9), bg=BG,
