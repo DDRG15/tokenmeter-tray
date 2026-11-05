@@ -38,7 +38,7 @@ the files currently on disk. It does not apply the desktop app's start-fresh
 floor, retention or manual session reset, and cannot see transcripts already
 removed from disk, so it can differ from the desktop panel; `window.scope_note`
 says so in every response. Records stamped more than a minute in the future are
-excluded. History days are local calendar days of the server process;
+excluded from summaries and from history. History days are local calendar days of the server process;
 `utc_offset_seconds` reports that offset.
 
 A usage record whose timestamp is missing or unparseable is never counted: the

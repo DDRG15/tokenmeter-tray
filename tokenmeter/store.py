@@ -460,7 +460,8 @@ class Store:
             for r in rows
         ]
 
-    def daily_totals(self, since_ts: float, provider: str = "", source: str = "") -> dict[str, Totals]:
+    def daily_totals(self, since_ts: float, provider: str = "", source: str = "",
+                     until_ts: float | None = None) -> dict[str, Totals]:
         """Aggregates per LOCAL day (`YYYY-MM-DD`) since `since_ts`.
 
         Grouping is done in SQLite with `localtime`, which uses the same system
@@ -474,7 +475,7 @@ class Store:
                     FROM usage_events WHERE ts >= ? AND ts <= ?
                       AND (?='' OR provider=?) AND (?='' OR source=?)
                     GROUP BY day ORDER BY day""",
-                (since_ts, _upper_bound(None), provider, provider, source, source),
+                (since_ts, _upper_bound(until_ts), provider, provider, source, source),
             ).fetchall()
         return {
             r["day"]: Totals(**{k: int(r[k]) for k in r.keys() if k != "day"})
@@ -505,11 +506,11 @@ class Store:
             ).fetchall()
         return [float(r["ts"]) for r in rows]
 
-    def first_event_ts_after(self, since_ts: float) -> float | None:
+    def first_event_ts_after(self, since_ts: float, until_ts: float | None = None) -> float | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT MIN(ts) AS t FROM usage_events WHERE ts >= ? AND ts <= ?",
-                (since_ts, _upper_bound(None))
+                (since_ts, _upper_bound(until_ts))
             ).fetchone()
         return float(row["t"]) if row and row["t"] is not None else None
 

@@ -296,6 +296,22 @@ def test_history_reports_the_utc_offset_in_force_at_the_query_time(tmp_path, mon
         time.tzset()
 
 
+def test_history_excludes_future_events_like_summary(tmp_path):
+    local = lambda *args: datetime(*args).timestamp()
+    now = local(2026, 9, 2, 12)
+    root = tmp_path / "claude"
+    root.mkdir()
+    (root / "s.jsonl").write_text(_claude_line("past", local(2026, 9, 2, 11))
+                                  + _claude_line("slightly_ahead", now + 30)
+                                  + _claude_line("future", local(2026, 9, 2, 12, 30)))
+    query = UsageQuery(root, None)
+    assert query.summary(hours=24, now=now)["totals"]["calls"] == 2
+    bars = query.history(days=7, now=now)["bars"]
+    assert bars[-1]["day"] == "2026-09-02"
+    assert bars[-1]["calls"] == 2
+    assert sum(bar["calls"] or 0 for bar in bars) == 2
+
+
 def test_window_excludes_future_events_and_declares_its_scope(tmp_path):
     now = time.time()
     root = tmp_path / "claude"

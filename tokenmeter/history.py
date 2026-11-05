@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import time
 
-from .store import Store
+from .store import CLOCK_TOLERANCE_S, Store
 
 RANGES_DAYS = (7, 30, 90)
 
@@ -68,9 +68,11 @@ def daily_series(
     now = time.time() if now is None else now
     today = date.fromtimestamp(now)
     start = today - timedelta(days=days - 1)
-    per_day = store.daily_totals(local_midnight(start), provider, source)
+    # Records stamped beyond the clock tolerance after `now` are not usage yet.
+    until = now + CLOCK_TOLERANCE_S
+    per_day = store.daily_totals(local_midnight(start), provider, source, until_ts=until)
 
-    first_ts = store.first_event_ts_after(0)
+    first_ts = store.first_event_ts_after(0, until_ts=until)
     first_day = date.fromtimestamp(first_ts) if first_ts is not None else None
 
     # With recorded coverage, a day without events is 0 only if some collector
