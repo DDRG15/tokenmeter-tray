@@ -64,6 +64,13 @@ def test_sizes_render_without_error():
         assert img.mode == "RGBA"
 
 
+def test_label_is_an_en_dash_without_a_session_and_digits_or_a_bang_otherwise():
+    from tokenmeter.ui.icon import _label
+    assert _label(0, False) == "\u2013"
+    assert _label(37.9, True) == "37"
+    assert _label(100, True) == "!"
+
+
 def test_idle_icon_differs_from_zero_percent():
     idle = render_icon(0, size=64, has_activity=False)
     active = render_icon(0, size=64, has_activity=True)
