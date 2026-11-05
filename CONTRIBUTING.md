@@ -2,9 +2,10 @@
 
 ## Development setup
 
-Use Windows 10/11, Python 3.12, and Microsoft Edge/WebView2. Linux and macOS are
-planned platforms; the native UI and installer currently require Windows.
-Start in the project root:
+Linux Mint 22.3 Cinnamon/X11 uses distribution Python 3.12, GTK 3 and Ayatana;
+see [LINUX.md](LINUX.md) for installation and [LINUX_DEVELOPMENT.md](LINUX_DEVELOPMENT.md)
+for isolated development. Windows 10/11 uses Python 3.12 and Microsoft
+Edge/WebView2. Start Windows development in the project root:
 
 ```powershell
 python -m venv .venv
@@ -25,16 +26,19 @@ environment. Do not remove pins to resolve an installation failure.
 
 | Location | Responsibility |
 |---|---|
-| `tokenmeter/__main__.py`, `app.py` | CLI, application lifecycle and Tk action queue |
+| `tokenmeter/__main__.py`, `app.py` | CLI and Windows lifecycle/Tk action queue |
+| `runtime.py`, `state.py`, `operations.py` | Linux lifecycle, shared observers and commands |
 | `tokenmeter/collectors/` | Proxy, transcript and Codex collection and parsing |
 | `tokenmeter/models.py`, `store.py` | Usage records, persistence and deduplication |
 | `session.py`, `weekly.py`, `calibration.py` | Session windows, weekly cycles and calibration |
 | `billing.py`, `pricing.py` | Billing classification and dated API-equivalent estimates |
+| `mcp.py`, `usage_query.py` | Optional read-only stdio server; independent MCP lockfiles |
 | `dashboard.py`, `history.py`, `exports.py` | Shared display data, history and exports |
-| `tokenmeter/ui/` | Tray, Tk views, local dashboard server and WebView2 child |
+| `tokenmeter/ui/` | Linux GTK/Ayatana; Windows Tk, dashboard server and WebView2 child |
 | `backups.py`, `instance.py`, `files.py` | Validated backups, instance locking and file handling |
 | `tests/`, `tests/fixtures/` | Automated checks and synthetic provider examples |
-| `tokenmeter.spec`, `install.ps1` | Executable packaging, installation and rollback |
+| `tokenmeter.spec`, `install.ps1` | Windows executable packaging, installation and rollback |
+| `scripts/install_linux.py`, `build_linux_archive.py` | Linux user installer and deterministic distribution |
 
 Python module names without a directory prefix are inside tokenmeter/.
 The dashboard window runs in a separate process so WebView2 and Tk each own
@@ -79,10 +83,22 @@ Do not replace it with file-descriptor capture when diagnosing dialog failures.
 ## CI and publication
 
 [The workflow](.github/workflows/tests.yml) runs the same pinned requirements
-on `windows-latest` with Python 3.12. Its checkout, Python setup and artifact
-upload actions are all v6 and declare Node.js 24. Their official manifests are
+in the Windows job on `windows-latest` with Python 3.12. Every push and pull
+request runs the Windows job, including `linux/` branches, because the Linux
+work shares runtime, storage and collector code with Windows. Separate Linux jobs
+cover the optional MCP stdio server and native GTK controls/file dialogs. The
+Linux job also installs pinned Playwright Chromium and runs the web dashboard
+and cross-origin proxy protection tests. A browser launch failure fails those
+checks. The Linux job uses distribution Python/GTK, a private D-Bus session and
+Xvfb; it preserves diagnostics before removing its task-owned sandbox. Local Cinnamon
+integration and graphical review remain distinct from virtual-display tests.
+The checkout, Python setup and artifact upload actions are all v6 and declare
+Node.js 24. Their official manifests are
 linked in [the README](README.md#continuous-integration). The action runtime
 does not change the app's Python version or require a local Node.js install.
+The workflow token is read-only. A `dependency-audit` job checks every pinned
+requirements file with `pip-audit`; a pin with a published advisory fails CI, so
+update the pin (and its transitive pins) rather than ignoring the advisory.
 
 Before pushing, review `git diff --check`, `git diff --stat` and the staged
 diff. Include the tests and documentation needed for the change. Publish only

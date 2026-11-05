@@ -1,4 +1,4 @@
-"""Configuration on disk: `%APPDATA%\\TokenMeter\\config.json`."""
+"""Persistent configuration: Windows AppData, Linux XDG or TOKENMETER_HOME."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import sys
 import re
 import shutil
 import tempfile
@@ -31,13 +32,32 @@ DEFAULT_UPSTREAMS: dict[str, str] = {
 }
 
 
+def _xdg(name: str, fallback: str) -> Path:
+    value = os.environ.get(name, "")
+    root = Path(value) if value and Path(value).is_absolute() else Path.home() / fallback
+    return root / "tokenmeter"
+
+
 def data_dir() -> Path:
-    """The app data folder. Honors TOKENMETER_HOME for tests."""
+    """Persistent usage data; TOKENMETER_HOME groups all files for tests."""
     override = os.environ.get("TOKENMETER_HOME")
     if override:
-        return Path(override)
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    return Path(base) / APP_NAME
+        return Path(override).expanduser()
+    if sys.platform.startswith("linux"):
+        return _xdg("XDG_DATA_HOME", ".local/share")
+    return Path(os.environ.get("APPDATA") or os.path.expanduser("~")) / APP_NAME
+
+
+def config_dir() -> Path:
+    if os.environ.get("TOKENMETER_HOME") or not sys.platform.startswith("linux"):
+        return data_dir()
+    return _xdg("XDG_CONFIG_HOME", ".config")
+
+
+def state_dir() -> Path:
+    if os.environ.get("TOKENMETER_HOME") or not sys.platform.startswith("linux"):
+        return data_dir()
+    return _xdg("XDG_STATE_HOME", ".local/state")
 
 
 @dataclass
@@ -240,7 +260,7 @@ class Config:
 
     @classmethod
     def path(cls) -> Path:
-        return data_dir() / "config.json"
+        return config_dir() / "config.json"
 
     @classmethod
     def load(cls) -> "Config":

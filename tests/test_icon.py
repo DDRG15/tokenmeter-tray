@@ -35,14 +35,16 @@ def test_text_flips_with_the_taskbar_theme():
     """Fixed white text disappears on the light taskbar."""
     dark = render_icon(50, size=64, light_taskbar=False)
     light = render_icon(50, size=64, light_taskbar=True)
-    assert dark.getpixel((32, 32)) != light.getpixel((32, 32))
+    # Different scalable fonts put either ink or the gap between digits at
+    # the exact center. Compare the rendered images, not one arbitrary pixel.
+    assert dark.tobytes() != light.tobytes()
 
     # The icon's center falls inside the glyph or the gap; the set of colors
     # present is compared instead, which does tell both themes apart.
     def has_near(img, target, tol=40):
         return any(
             all(abs(px[i] - target[i]) <= tol for i in range(3)) and px[3] > 200
-            for px in img.getdata()
+            for px in img.get_flattened_data()
         )
 
     assert has_near(dark, TEXT_ON_DARK), "on a dark taskbar the number is light"
@@ -62,10 +64,17 @@ def test_sizes_render_without_error():
         assert img.mode == "RGBA"
 
 
+def test_label_is_an_en_dash_without_a_session_and_digits_or_a_bang_otherwise():
+    from tokenmeter.ui.icon import _label
+    assert _label(0, False) == "\u2013"
+    assert _label(37.9, True) == "37"
+    assert _label(100, True) == "!"
+
+
 def test_idle_icon_differs_from_zero_percent():
     idle = render_icon(0, size=64, has_activity=False)
     active = render_icon(0, size=64, has_activity=True)
-    assert list(idle.getdata()) != list(active.getdata())
+    assert list(idle.get_flattened_data()) != list(active.get_flattened_data())
 
 
 def snapshot(percent=35.0, has_activity=True, inp=1234, out=5678):

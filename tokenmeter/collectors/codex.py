@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -39,12 +40,16 @@ from ..models import (
     UsageEvent,
 )
 from ..store import Store
-from .base import Collector
+from .base import Collector, bounded_count
 from .transcripts import parse_timestamp
 
 log = logging.getLogger(__name__)
 
 STATE_RATE_LIMITS = "codex_rate_limits"
+
+# How many of the newest rollouts outside the window are searched for the
+# plan's limits (a bucket without windows, like `premium`, carries none).
+LIMITS_FALLBACK_FILES = 5
 
 # Byte pre-filter: almost all lines are messages and tool calls, and parsing
 # their JSON is the bulk of a backfill's cost.
@@ -63,6 +68,9 @@ class CodexStats:
     lines_read: int = 0
     events_new: int = 0
     events_duplicate: int = 0
+    # Usage records whose timestamp is missing or unparseable. They are never
+    # stored: inventing a date would put the tokens in the wrong window.
+    events_undated: int = 0
     last_scan_ts: float = 0.0
     last_error: str = ""
 
@@ -80,9 +88,7 @@ class _FileContext:
 
 
 def _int(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return 0
-    return max(0, value)
+    return bounded_count(value)
 
 
 def read_auth_mode(root: Path) -> str:
@@ -113,15 +119,27 @@ def event_from_record(
     obj: dict, model: str, billing: str, plan: str
 ) -> UsageEvent | None:
     """Converts a `token_usage_record` into a `UsageEvent`, or None if it does not apply."""
+    return parse_record(obj, model, billing, plan)[0]
+
+
+def parse_record(
+    obj: dict, model: str, billing: str, plan: str
+) -> tuple[UsageEvent | None, bool]:
+    """(event, undated) for a `token_usage_record`.
+
+    `undated` is True when the record is countable in every other respect but
+    carries no usable timestamp. Such a record is not turned into an event: a
+    made-up date would charge its tokens to whatever window is open now.
+    """
     payload = obj.get("payload")
     if not isinstance(payload, dict):
-        return None
+        return None, False
     usage = payload.get("usage")
     response_id = payload.get("response_id")
     if not isinstance(usage, dict) or not isinstance(response_id, str) or not response_id:
-        return None  # without a response_id it cannot be deduplicated; better not to count it
+        return None, False  # without a response_id it cannot be deduplicated; better not to count it
     if "input_tokens" not in usage and "output_tokens" not in usage:
-        return None
+        return None, False
 
     total_in = _int(usage.get("input_tokens"))
     cached = _int(usage.get("cached_input_tokens"))
@@ -139,7 +157,10 @@ def event_from_record(
         cache_write = written
         net_input -= written
 
-    ts = parse_timestamp(obj.get("timestamp")) or time.time()
+    # `is None`, not falsy: a parsed 0.0 (the Unix epoch) is a real timestamp.
+    ts = parse_timestamp(obj.get("timestamp"))
+    if ts is None:
+        return None, True
     return UsageEvent(
         ts=ts,
         provider="openai",
@@ -154,14 +175,20 @@ def event_from_record(
         usage_complete=True,
         billing=billing,
         plan=plan,
-    )
+    ), False
 
 
 def _window(raw: object) -> dict | None:
-    """Copies only the three fields of a limit window."""
+    """Copies only the three numeric fields of a limit window; anything else is None."""
     if not isinstance(raw, dict):
         return None
-    return {k: raw.get(k) for k in ("used_percent", "window_minutes", "resets_at")}
+    return {k: _finite(raw.get(k)) for k in ("used_percent", "window_minutes", "resets_at")}
+
+
+def _finite(value: object) -> float | int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def load_rate_limits(store: Store) -> dict | None:
@@ -181,7 +208,8 @@ def load_rate_limits(store: Store) -> dict | None:
 class CodexCollector(Collector):
     name = "codex"
 
-    def __init__(self, store: Store, root: Path, poll_seconds: float = 5.0) -> None:
+    def __init__(self, store: Store, root: Path, poll_seconds: float = 5.0, *,
+                 read_authentication: bool = True) -> None:
         super().__init__()
         self._store = store
         self._root = root
@@ -190,6 +218,7 @@ class CodexCollector(Collector):
         self._covered_until: float | None = None
         self._contexts: dict[str, _FileContext] = {}
         self._auth_mode = ""
+        self._read_authentication = read_authentication
 
     def run(self) -> None:
         while not self._stop.is_set():
@@ -218,28 +247,65 @@ class CodexCollector(Collector):
         self.stats.last_error = ""
         if not self._root.exists():
             return 0
-        self._auth_mode = read_auth_mode(self._root)
+        self._auth_mode = read_auth_mode(self._root) if self._read_authentication else ""
         added = 0
         files = 0
         oldest = None
+        skipped: list[tuple[float, Path]] = []
         for path in self._rollouts():
-            files += 1
-            if self._covered_until is None:
+            mtime = None
+            if self.modified_since is not None or self._covered_until is None:
                 try:
                     mtime = path.stat().st_mtime
-                    oldest = mtime if oldest is None else min(oldest, mtime)
                 except OSError:
                     pass
+            # The oldest file on disk anchors the coverage, so it counts even
+            # when the file is skipped below.
+            if self._covered_until is None and mtime is not None:
+                oldest = mtime if oldest is None else min(oldest, mtime)
+            if self.modified_since is not None:
+                # On-demand readers skip files nobody wrote to since the cutoff:
+                # an event inside the window cannot live only in such a file.
+                if mtime is None:
+                    continue
+                if mtime < self.modified_since:
+                    skipped.append((mtime, path))
+                    continue
+            files += 1
             try:
                 added += self._read_new(path)
             except OSError as exc:
                 # File locked or deleted midway: retried on the next cycle.
                 self.stats.last_error = f"{path.name}: {exc}"
+        if skipped:
+            self._limits_from_skipped(skipped)
         self.stats.files_seen = files
         now = time.time()
         self.stats.last_scan_ts = now
         self._mark_coverage(oldest, now)
         return added
+
+    def _limits_from_skipped(self, skipped: list[tuple[float, Path]]) -> None:
+        """Real limits when no file inside the window carried them.
+
+        The plan's limits are a snapshot, not a windowed count: the latest one
+        stays meaningful (the caller flags it as expired once its reset passed)
+        however long ago the session ended. So the newest skipped rollouts are
+        read for their `rate_limits` only, never for events, until one has
+        windows.
+        """
+        stored = load_rate_limits(self._store)
+        if stored is not None and (stored.get("primary") or stored.get("secondary")):
+            return
+        for _, path in sorted(skipped, key=lambda item: item[0], reverse=True)[:LIMITS_FALLBACK_FILES]:
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            _, limits = self._digest(data, _FileContext(), emit=False, limits=True)
+            if limits:
+                self._save_rate_limits(limits)
+                return
 
     def _mark_coverage(self, oldest: float | None, now: float) -> None:
         """Coverage of what the rollouts on disk guarantee.
@@ -307,9 +373,11 @@ class CodexCollector(Collector):
         return added
 
     def _digest(
-        self, data: bytes, ctx: _FileContext, emit: bool
+        self, data: bytes, ctx: _FileContext, emit: bool, limits: bool = False
     ) -> tuple[list[UsageEvent], list[tuple[float, dict]]]:
         """Processes complete lines. With `emit=False` it only updates `ctx`.
+
+        `limits=True` also collects the `rate_limits` without emitting events.
 
         Two passes: the `plan_type` may appear (in a `token_count`) after the
         record that has to be tagged in the same batch, and a turn may have been
@@ -317,7 +385,7 @@ class CodexCollector(Collector):
         events are built.
         """
         records: list[dict] = []
-        limits: list[tuple[float, dict]] = []
+        found: list[tuple[float, dict]] = []
         for raw in data.split(b"\n"):
             if not raw.strip():
                 continue
@@ -355,8 +423,8 @@ class CodexCollector(Collector):
                 # the last `premium` overwrote the good data with empty windows.
                 has_window = isinstance(rate.get("primary"), dict) or isinstance(
                     rate.get("secondary"), dict)
-                if emit and ts is not None and has_window:
-                    limits.append((ts, rate))
+                if (emit or limits) and ts is not None and has_window:
+                    found.append((ts, rate))
 
         events: list[UsageEvent] = []
         if records:
@@ -367,10 +435,12 @@ class CodexCollector(Collector):
             for obj in records:
                 turn_id = obj["payload"].get("turn_id")
                 model = ctx.models.get(turn_id, "") if isinstance(turn_id, str) else ""
-                event = event_from_record(obj, model, billing, plan)
+                event, undated = parse_record(obj, model, billing, plan)
+                if undated:
+                    self.stats.events_undated += 1
                 if event is not None:
                     events.append(event)
-        return events, limits
+        return events, found
 
     # -- real limits --------------------------------------------------------
 
@@ -379,7 +449,8 @@ class CodexCollector(Collector):
 
         Rollouts are read in name order, not time order, and archived ones repeat
         old sessions: without comparing by timestamp, an old file would overwrite
-        the fresh data with a stale one.
+        the fresh data with a stale one. A window the newer snapshot omits is
+        taken from the stored one while it is still valid.
         """
         ts, rate = max(limits, key=lambda item: item[0])
         stored = load_rate_limits(self._store)
@@ -389,13 +460,25 @@ class CodexCollector(Collector):
         if stored_useful and stored["captured_ts"] >= ts:
             return
         credits = rate.get("credits")
+        windows = {name: _window(rate.get(name)) for name in ("primary", "secondary")}
+        if stored_useful:
+            # A snapshot may carry only one window (a later event with just the
+            # 5 h one). The other keeps describing the plan until its own reset
+            # passes, so a still-valid stored window survives; an expired one,
+            # or one that was never stored, is dropped.
+            for name, window in windows.items():
+                kept = stored.get(name)
+                if window is None and isinstance(kept, dict):
+                    resets = _finite(kept.get("resets_at"))
+                    if resets is not None and resets > ts:
+                        windows[name] = _window(kept)
         snapshot = {
             "captured_ts": ts,
             "plan_type": rate.get("plan_type") if isinstance(rate.get("plan_type"), str) else "",
-            "primary": _window(rate.get("primary")),
-            "secondary": _window(rate.get("secondary")),
+            "primary": windows["primary"],
+            "secondary": windows["secondary"],
             "credits": {
-                "has_credits": bool(credits.get("has_credits")) if isinstance(credits, dict) else False
+                "has_credits": isinstance(credits, dict) and credits.get("has_credits") is True
             },
         }
         self._store.set_state(STATE_RATE_LIMITS, json.dumps(snapshot))

@@ -1389,6 +1389,7 @@ function renderState(st) {
     const row = document.createElement('div'); row.className = 'health-row';
     const name = document.createElement('span'), state = document.createElement('span');
     name.textContent = c.name; state.textContent = c.state + (isNum(c.last_scan_age) ? ` · scanned ${Math.round(c.last_scan_age)} s ago` : '');
+    if (isNum(c.events_undated) && c.events_undated > 0) state.textContent += ` · ${c.events_undated} undated skipped`;
     if (c.error) state.style.color = '#f4b366';
     row.append(name,state); return row;
   }));

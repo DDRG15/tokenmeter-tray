@@ -1,6 +1,10 @@
 # Synthetic protocol fixtures
 
-These files model provider response formats for parser tests. They are not
+`dbus-session.conf` configures the private Linux test bus without desktop
+service activation. It is used with the synthetic indicator host in
+`tests/linux_indicator.py`; its temporary socket disappears with the bus.
+
+The provider fixtures model response formats for parser tests. They are not
 account exports. Identifiers, paths, timings and session metadata are synthetic
 placeholders; fixed token counts exercise cache subtraction, deduplication,
 reasoning-token handling and streaming behavior.

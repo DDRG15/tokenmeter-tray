@@ -14,7 +14,7 @@ import zipfile
 from contextlib import closing
 
 from dataclasses import asdict
-from .config import Config
+from .config import Config, data_dir
 from .store import Store
 from .files import output_destination
 
@@ -96,7 +96,7 @@ def restore_backup(path: str | Path, home: Path) -> Path:
         _unpack(Path(path), stage)
         previous = home / f"backup-before-restore-{time.time_ns()}.zip"
         # Config.load() uses TOKENMETER_HOME; read the given home explicitly.
-        cfg_path = home / "config.json"
+        cfg_path = Config.path() if home.resolve() == data_dir().resolve() else home / "config.json"
         config = Config.from_dict(json.loads(cfg_path.read_text(encoding="utf-8")), strict=True) if cfg_path.exists() else Config()
         old = Store(home / "usage.db")
         try:
@@ -109,10 +109,20 @@ def restore_backup(path: str | Path, home: Path) -> Path:
         try:
             for name in ("usage.db-wal", "usage.db-shm"):
                 (home / name).unlink(missing_ok=True)
-            for name in ("usage.db", "config.json"):
-                os.replace(stage / name, home / name)
+            os.replace(stage / "usage.db", home / "usage.db")
+            # XDG config/data can be on different filesystems. Stage the
+            # configuration beside its final destination before replacement.
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, filename = tempfile.mkstemp(prefix="restore-config-", dir=cfg_path.parent)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write((stage / "config.json").read_bytes())
+                os.replace(filename, cfg_path)
+            finally:
+                Path(filename).unlink(missing_ok=True)
         except BaseException:
-            for name in ("usage.db", "config.json"):
-                shutil.copyfile(rollback / name, home / name)
+            shutil.copyfile(rollback / "usage.db", home / "usage.db")
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(rollback / "config.json", cfg_path)
             raise
         return previous

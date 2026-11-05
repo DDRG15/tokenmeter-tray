@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+
+import pytest
 from datetime import date, datetime, timezone
 
 from tests.test_transcripts import assistant_line, write
@@ -11,6 +13,11 @@ from tokenmeter.collectors.transcripts import TranscriptCollector
 from tokenmeter.config import Config
 from tokenmeter.history import daily_series, local_midnight
 from tokenmeter.store import Store
+
+
+@pytest.fixture(autouse=True)
+def synthetic_billing(monkeypatch):
+    monkeypatch.setattr("tokenmeter.collectors.transcripts.CachedBilling.get", lambda self: ("unknown", ""))
 
 
 def iso(ts: float) -> str:

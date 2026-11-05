@@ -19,6 +19,8 @@ import ast
 import importlib.metadata as md
 import re
 import sys
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,16 +91,23 @@ def test_no_package_is_pinned_twice():
     assert not (pinned_names("requirements.txt") & pinned_names("requirements-dev.txt"))
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows dependency metadata contract")
 def test_runtime_imports_are_covered_by_requirements_txt():
     code = list((ROOT / "tokenmeter").rglob("*.py")) + [ROOT / "launcher.py"]
+    # Optional GTK and MCP entry points have separate dependency contracts.
+    optional = {ROOT / "tokenmeter/ui/linux.py", ROOT / "tokenmeter/mcp.py", ROOT / "tokenmeter/ui/notifications.py"}
+    code = [p for p in code if p not in optional]
     runtime = pinned_names("requirements.txt")
     for module, dists in distributions_for(third_party_imports(code)).items():
         assert dists, f"{module} is imported but not installed"
         assert dists & runtime, f"{module} ({dists}) missing from requirements.txt"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows dependency metadata contract")
 def test_test_imports_are_covered_by_dev_requirements():
-    tests = list((ROOT / "tests").rglob("*.py"))
+    tests = [p for p in (ROOT / "tests").rglob("*.py")
+             if p.name not in {"test_mcp.py", "linux_indicator.py"}]
+    # MCP has its own manifest; the Linux indicator fixture uses system GI.
     available = pinned_names("requirements.txt") | pinned_names("requirements-dev.txt")
     for module, dists in distributions_for(third_party_imports(tests)).items():
         assert dists & available, f"{module} ({dists}) missing from requirements-dev.txt"

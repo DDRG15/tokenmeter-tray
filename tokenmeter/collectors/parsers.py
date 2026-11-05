@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, replace
 
 from ..models import UsageEvent
+from .base import bounded_count
 
 # Paths that produce tokens. Used so a call to /v1/models or to a health
 # endpoint is not flagged as "usage lost".
@@ -68,7 +69,15 @@ class PartialUsage:
 
 
 def _int(value: object) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    """A token count from a response: None when absent or not an int, else clamped.
+
+    Same bounds as the file readers (`bounded_count`): never negative and never
+    past `MAX_COUNT`, so one hostile or broken response cannot overflow a column
+    sum in the store.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return bounded_count(value)
 
 
 # -- extractors per provider shape -----------------------------------

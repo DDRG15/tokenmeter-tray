@@ -20,7 +20,7 @@ from .billing import label as billing_label
 from .models import BILLING_API, BILLING_SUBSCRIPTION
 from .history import RANGES_DAYS, daily_series, local_midnight, summarize
 from .pricing import cost_usd, format_usd, VERIFIED_ON
-from .store import Totals
+from .store import ModelTotals, Totals, merge_model_days
 
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_MODELS = 8
@@ -46,10 +46,30 @@ def level(percent: float, warn: int, danger: int, active: bool = True) -> str:
     return "ok"
 
 
-def _model_cost(row) -> float | None:
-    return cost_usd(row.model, row.input_tokens, row.output_tokens,
-                    row.cache_write_tokens, row.cache_read_tokens,
-                    row.cache_write_1h_tokens)
+def priced_models(day_rows) -> list[tuple[ModelTotals, float | None]]:
+    """(totals, API-equivalent cost) per (model, provider, billing, plan).
+
+    The cost is computed per local day and summed, so a promotional price only
+    applies to the days it was in force. Aggregated rows lose that: pricing a
+    whole range at today's date charges every call at today's rate. A model with
+    no price on any day has no cost (`None`), never an estimate.
+    """
+    days: dict[tuple[str, str, str, str], list] = {}
+    for part in day_rows:
+        days.setdefault((part.model, part.provider, part.billing, part.plan), []).append(part)
+    priced = []
+    for totals in merge_model_days(day_rows):
+        cost: float | None = 0.0
+        for part in days[(totals.model, totals.provider, totals.billing, totals.plan)]:
+            day_cost = cost_usd(part.model, part.input_tokens, part.output_tokens,
+                                part.cache_write_tokens, part.cache_read_tokens,
+                                part.cache_write_1h_tokens, on_date=part.day)
+            if day_cost is None:
+                cost = None
+                break
+            cost += day_cost
+        priced.append((totals, cost))
+    return priced
 
 
 class _Sum:
@@ -75,20 +95,23 @@ class _Sum:
 ZERO = {"value": 0.0, "text": format_usd(0.0), "partial": False}
 
 
-def _models(rows) -> tuple[list[dict], dict, list[dict]]:
+def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
     """Rows per model, cost, and breakdown by billing type.
+
+    `day_rows` come from `Store.totals_by_model_day`: the cost of each model is
+    priced day by day (see `priced_models`).
 
     The total is still the API equivalent of everything. Below it, what **was**
     paid via API is separated from what was done under a subscription, which is
     included in the plan: only the former is money spent.
     """
-    total_io = sum(r.io_tokens for r in rows) or 1
+    rows = priced_models(day_rows)
+    total_io = sum(r.io_tokens for r, _ in rows) or 1
     out, total = [], _Sum()
     api, sub = _Sum(), _Sum()
     unknown = False
     groups: dict[tuple[str, str], dict] = {}
-    for row in rows:
-        c = _model_cost(row)
+    for row, c in rows:
         total.add(c)
         if row.billing == BILLING_API:
             api.add(c)
@@ -141,12 +164,14 @@ def _models(rows) -> tuple[list[dict], dict, list[dict]]:
             "subscription_equivalent": sub.as_dict() if sub.any else dict(ZERO),
         }
         if unknown:
-            known = cost["api_spend"]
-            known["partial"] = True
-            if not api.any:
-                known["value"], known["text"] = None, "—"
-            else:
-                known["text"] += " (partial)"
+            # Unknown calls may belong to either side, so neither can claim a
+            # certain zero or a complete total.
+            for known, side in ((cost["api_spend"], api), (cost["subscription_equivalent"], sub)):
+                known["partial"] = True
+                if not side.any:
+                    known["value"], known["text"] = None, "—"
+                elif not known["text"].endswith(" (partial)"):
+                    known["text"] += " (partial)"
             cost["note"] += " · some calls have unknown billing"
     return out[:MAX_MODELS], cost, billing
 
@@ -281,9 +306,10 @@ def build_state(app, now: float | None = None, provider: str = "", source: str =
             "level": level(w.percent, cfg.warn_percent, cfg.danger_percent, w.configured),
         })
 
-    rows = app.store.totals_by_model(app.session.general_start(now), provider, source)
+    day_rows = app.store.totals_by_model_day(app.session.general_start(now), provider, source)
+    rows = merge_model_days(day_rows)
     t = Totals(**{name: sum(getattr(r, name) for r in rows) for name in Totals.__dataclass_fields__})
-    models, cost, billing = _models(rows)
+    models, cost, billing = _models(day_rows)
 
     warning = ""
     if t.incomplete_calls:
@@ -343,7 +369,8 @@ def build_health(app, now: float) -> list[dict]:
         health.append({"name": title, "state": state, "error": failed,
                        "last_scan_age": max(0, now-seen) if seen else None,
                        "files": getattr(stats, "files_seen", None),
-                       "missing_usage": getattr(stats, "missing_usage", 0)})
+                       "missing_usage": getattr(stats, "missing_usage", 0),
+                       "events_undated": getattr(stats, "events_undated", 0)})
     return health
 
 
@@ -382,8 +409,8 @@ def build_history(app, days: int, now: float | None = None, provider: str = "", 
                         source=source, expected_sources=history_sources(cfg, provider, app.store))
     s = summarize(bars)
     last = len(bars) - 1
-    rows = app.store.totals_by_model(local_midnight(bars[0].day), provider, source)
-    models, cost, billing = _models(rows)
+    day_rows = app.store.totals_by_model_day(local_midnight(bars[0].day), provider, source)
+    models, cost, billing = _models(day_rows)
     return {
         "days": days,
         "filters": {"provider": provider, "source": source, "options": app.store.filter_options()},

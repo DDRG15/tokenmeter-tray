@@ -7,9 +7,26 @@ import threading
 
 log = logging.getLogger(__name__)
 
+# SQLite stores 64-bit integers and `SUM()` raises "integer overflow" past
+# 2**63 - 1, which would abort every aggregate query over the table. The cap is
+# per count, so it also has to leave room for many rows: at 2**40 (about 1.1e12,
+# far above any real call) it takes 2**63 / 2**40 = 2**23 (about 8.4 M) rows at
+# the cap before a column sum can overflow.
+MAX_COUNT = 2**40
+
+
+def bounded_count(value: object) -> int:
+    """A token count from a record: a non-negative int, 0 when absent or malformed."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return min(max(0, value), MAX_COUNT)
+
 
 class Collector:
     name = "collector"
+    # Desktop collectors watch everything; an on-demand reader may set a cutoff
+    # and skip files whose modification time is older.
+    modified_since: float | None = None
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None

@@ -80,7 +80,7 @@ def test_backup_rejects_paths_and_unsupported_members(tmp_path):
 
 
 @pytest.mark.parametrize("filename", ["config.json", "usage.db", "usage.db-wal", "usage.db-shm",
-                                     "instance.lock", "tokenmeter.log", "unused/../CONFIG.JSON"])
+                                     "instance.lock", "tokenmeter.log", pytest.param("unused/../CONFIG.JSON", marks=pytest.mark.skipif(sys.platform != "win32", reason="Windows case-insensitive filename alias"))])
 def test_backup_cannot_replace_internal_files(tmp_path, filename):
     cfg = Config()
     config_path = tmp_path / "config.json"
@@ -97,6 +97,7 @@ def test_backup_cannot_replace_internal_files(tmp_path, filename):
         store.close()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows export dialog; GTK has native protection tests")
 @pytest.mark.parametrize("format", ["json", "csv"])
 def test_export_cannot_replace_configuration(tmp_path, monkeypatch, format):
     import tokenmeter.app as app_module
@@ -111,10 +112,75 @@ def test_export_cannot_replace_configuration(tmp_path, monkeypatch, format):
     monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **_: str(target))
     monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **_: errors.append(args))
     try:
-        app._export({"action": f"export_{format}", "days": 7})
+        app_module.App._export(app, {"action": f"export_{format}", "days": 7})
         assert len(errors) == 1 and "internal data" in errors[0][1]
         assert target.read_bytes() == before
         assert app.store.totals_since(0).calls == 1
+    finally:
+        app.store.close()
+
+
+class _Root:
+    def deiconify(self):
+        pass
+
+    def withdraw(self):
+        pass
+
+
+def _windows_app(tmp_path):
+    from types import SimpleNamespace
+    app = app_without_tk(tmp_path)
+    app.root = _Root()
+    app.tray = SimpleNamespace(update=lambda snap: None)
+    app.panel = SimpleNamespace(visible=False)
+    app._refresh_ui = lambda: None  # App method; the fixture is a bare RuntimeState
+    return app
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows App imports tkinter")
+def test_windows_app_uses_the_shared_runtime_state():
+    import tokenmeter.app as app_module
+    from tokenmeter.state import RuntimeState
+    assert issubclass(app_module.App, RuntimeState)
+    for name in ("snapshot", "sources_text", "calibration_health", "weekly_origin"):
+        assert getattr(app_module.App, name) is getattr(RuntimeState, name)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows App imports tkinter")
+def test_windows_dialogs_delegate_to_shared_operations(tmp_path, monkeypatch):
+    import tokenmeter.app as app_module
+    from tokenmeter import operations
+    app = _windows_app(tmp_path)
+    calls = []
+    def spy(name):
+        real = getattr(operations, name)
+        def wrapper(*args, **kwargs):
+            calls.append(name)
+            return real(*args, **kwargs)
+        monkeypatch.setattr(operations, name, wrapper)
+    for name in ("set_budget", "calibrate_week", "write_export"):
+        spy(name)
+    shown = []
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *args, **_: shown.append(args))
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **_: shown.append(args))
+    try:
+        monkeypatch.setattr(app_module.simpledialog, "askinteger", lambda *a, **k: 5000)
+        app_module.App._ask_budget(app)
+        assert app.config.session_budget_tokens == 5000
+
+        add(app.store, "week", ts=time.time() - 60)
+        monkeypatch.setattr(app_module.simpledialog, "askstring", lambda *a, **k: "24")
+        monkeypatch.setattr(app_module.simpledialog, "askfloat", lambda *a, **k: 50.0)
+        app_module.App._ask_weekly(app)
+        assert app.config.weekly_budget_tokens == 240
+
+        target = tmp_path / "usage.json"
+        monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **_: str(target))
+        app_module.App._export(app, {"action": "export_json", "days": 7})
+        assert json.loads(target.read_text(encoding="utf-8"))
+        assert calls == ["set_budget", "calibrate_week", "write_export"]
+        assert shown[-1][0] == "Export"
     finally:
         app.store.close()
 
@@ -180,6 +246,7 @@ def test_cli_maintenance_is_rejected_when_app_has_lock(tmp_path,monkeypatch):
     assert not (tmp_path/"usage.db").exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk lifecycle; GTK has native closure tests")
 def test_shutdown_requests_the_close_and_the_loop_handles_it(tmp_path, monkeypatch):
     """The installer closes with `--shutdown` instead of killing the app mid-write."""
     import tokenmeter.__main__ as cli
