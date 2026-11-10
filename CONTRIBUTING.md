@@ -100,18 +100,10 @@ The workflow token is read-only. A `dependency-audit` job checks every pinned
 requirements file with `pip-audit`; a pin with a published advisory fails CI, so
 update the pin (and its transitive pins) rather than ignoring the advisory.
 
-Before pushing, review `git diff --check`, `git diff --stat` and the staged
-diff. Include the tests and documentation needed for the change. Publish only
-project files: exclude local configuration, credentials, real transcripts,
-usage databases, personal exports, backups and internal notes. A source commit
-does not update an already-installed executable; build and install separately
-when an application update is intended.
-
-After pushing, inspect the workflow for that exact commit. A complete result
-includes source tests, the build, packaged tests and artifact upload. Report
-failures, skips and annotations accurately. A green job can still carry a
-deprecation warning. Updating the workflow affects future runs; historical
-annotations remain visible on their original run.
+Include the tests and documentation needed for the change. Publish only
+project files; never commit credentials, transcripts, usage databases or
+exports. A source commit does not update an already-installed executable; build
+and install separately when an application update is intended.
 
 Download the **TokenMeter** artifact from a successful run to test the packaged
 app on another Windows machine. Artifacts require GitHub sign-in and expire;
