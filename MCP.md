@@ -41,6 +41,10 @@ says so in every response. Records stamped more than a minute in the future are
 excluded from summaries and from history. History days are local calendar days of the server process;
 `utc_offset_seconds` reports that offset.
 
+`totals.incomplete_calls` (and `incomplete_calls` on each history day) counts calls
+recorded without complete usage data, such as a stream that ended before its final
+usage report; the real tokens of those calls are higher than shown.
+
 A usage record whose timestamp is missing or unparseable is never counted: the
 server does not guess a date for it. Each source reports how many such records
 it skipped in `events_undated` (under `collectors` in every tool response); a

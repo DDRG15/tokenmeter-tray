@@ -194,6 +194,15 @@ you give it.
 The proxy forwards headers and credentials untouched and **does not write any
 request or response body to disk**. It only persists `usage` numbers.
 
+A call is recorded even when the client hangs up before the response ends
+(a cancelled request, Esc in an agent, a timeout). The proxy stops reading,
+releases the upstream connection and records what it saw, marked as incomplete.
+How much that is depends on the provider: an Anthropic stream reports the input
+tokens at its start, so those are kept; an OpenAI-style stream reports usage only
+in its last chunk, so a stream cut before the end is recorded with no tokens.
+Either way the call counts as one "without usage data" in the window, and the
+totals that include it are a minimum.
+
 ### 3. Codex sessions
 
 Reads local JSONL rollouts in `~/.codex/sessions` and
@@ -502,7 +511,10 @@ Every call carries its billing type, detected automatically:
 The window separates **API equivalent · billed via API** (what the calls billed
 per token would cost at published rates; it is calculated, not a recorded
 charge) from **Subscription equivalent** (included in your plan, not paid
-separately), and puts a badge on each model. The credential is inspected and discarded: it is never stored.
+separately), and puts a badge on each model; the Linux window writes the billing
+type after each model name. The same model used under a subscription and through
+an API key appears as two rows. The credential is inspected and discarded: it is
+never stored.
 
 Anything that cannot be detected is set by hand per provider in `config.json`:
 

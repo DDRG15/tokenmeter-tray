@@ -64,8 +64,8 @@ validates first, retains a previous backup, closes collectors and exits afterwar
 
 ## Interface
 
-Overview shows Claude session/weekly usage, provider/model tokens, API-equivalent
-estimates and Codex's recorded limits. Percentages keep their own plan scope.
+Overview shows Claude session/weekly usage, provider/model tokens with each
+model's billing type, API-equivalent estimates and Codex's recorded limits. Percentages keep their own plan scope.
 History provides filters, a chart and 7/30/90-day table. Unknown days are marked
 as unknown, not zero. CSV/JSON exports use the selected filters and protect app
 files. Settings provides manual budget, calibration from claude.ai, weekly reset,
