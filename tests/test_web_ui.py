@@ -106,3 +106,22 @@ def test_hiding_costs_keeps_tokens_on_both_tabs(web_page):
     page.wait_for_function("!document.body.classList.contains('hide-cost')")
     assert page.locator("#hCostVal").is_visible()
     assert errors == []
+
+
+def test_same_model_under_two_billing_types_renders_two_rows(web_page):
+    """Subscription and API-key calls of one model are two rows, not one overwritten row."""
+    page, app, errors = web_page
+    now = time.time()
+    for billing, plan, key in (("subscription", "max", "dual:sub"), ("api", "", "dual:api")):
+        app.store.add_event(UsageEvent(ts=now - 90, provider="anthropic", model="claude-dual",
+                                       input_tokens=1_000, output_tokens=0, source="proxy",
+                                       dedupe_key=key, billing=billing, plan=plan))
+    rows = "#models .mrow:has(.m-name[title='claude-dual'])"
+    page.wait_for_function(
+        f"document.querySelectorAll(\"{rows}\").length >= 1", timeout=15_000)
+    page.wait_for_timeout(2_500)  # let every row of the poll render before counting
+    badges = page.eval_on_selector_all(
+        f"{rows} .m-bill", "els => els.map(e => e.textContent.trim())")
+    assert sorted(badges) == ["API", "Subscription Max"]
+    assert page.locator(rows).count() == 2
+    assert errors == []

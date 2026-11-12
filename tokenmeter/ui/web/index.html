@@ -1327,14 +1327,16 @@ function renderModels(box, list, countEl) {
   if (!box._rows) { box.innerHTML = ''; box._rows = new Map(); }
   const seen = new Set();
   list.forEach(m => {
-    const key = (m.provider || '') + '|' + (m.model || '');
+    /* the dashboard returns one row per provider, model, billing type and plan: the DOM key must be as fine, or the rows overwrite each other */
+    const key = (m.provider || '') + '|' + (m.model || '') + '|' + (m.billing || '') + '|' + (m.plan || '');
+    const colorKey = (m.provider || '') + '|' + (m.model || '');
     seen.add(key);
     let row = box._rows.get(key);
     if (!row) {
       row = document.createElement('div');
       row.className = 'mrow';
-      row.innerHTML = `<div class="m-top"><span class="dot" style="background:${colorFor(key)}"></span><span class="m-name"></span><span class="m-prov"></span><span class="pill m-bill" hidden></span><span class="m-cost"></span></div>
-        <div class="m-bar"><i style="background:linear-gradient(90deg, color-mix(in srgb, ${colorFor(key)} 55%, transparent), ${colorFor(key)})"></i></div>
+      row.innerHTML = `<div class="m-top"><span class="dot" style="background:${colorFor(colorKey)}"></span><span class="m-name"></span><span class="m-prov"></span><span class="pill m-bill" hidden></span><span class="m-cost"></span></div>
+        <div class="m-bar"><i style="background:linear-gradient(90deg, color-mix(in srgb, ${colorFor(colorKey)} 55%, transparent), ${colorFor(colorKey)})"></i></div>
         <div class="m-meta"><span class="m-io"></span><span class="m-calls"></span><span class="m-share"></span></div>`;
       setText($('.m-name', row), m.model || '—'); $('.m-name', row).title = m.model || '';
       setText($('.m-prov', row), m.provider || '—');
