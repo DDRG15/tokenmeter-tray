@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tokenmeter.anchors import AnchorError, parse_reset
+from tokenmeter.anchors import parse_reset
 from tokenmeter.config import Config
 from tokenmeter.models import UsageEvent
 from tokenmeter.operations import calibrate_session, calibrate_week
@@ -231,10 +231,10 @@ def test_reset_text_and_single_point_calibration_persist_in_different_places(leg
     assert (snapshot.start_ts, snapshot.end_ts, snapshot.percent) == (start, reset, 25)
 
 
-def test_literal_resets_at_prefix_is_currently_rejected(legacy):
-    # current behavior: the parser strips "Resets", but does not strip the word "at".
-    with pytest.raises(AnchorError, match="cannot understand the time"):
-        parse_reset("Resets at 15:00", legacy.clock.now, 5 * HOUR)
+def test_literal_resets_at_prefix_is_accepted(legacy):
+    # claude.ai writes "Resets at <time>": the connector word is stripped like "in".
+    reset = parse_reset("Resets at 15:00", legacy.clock.now, 24 * HOUR)
+    assert reset > legacy.clock.now
 
 
 def test_expired_web_anchor_can_reanchor_to_an_older_local_call(legacy):

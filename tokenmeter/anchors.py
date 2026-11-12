@@ -47,10 +47,15 @@ _DURATION = re.compile(
 _CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(a\.?\s?m\.?|p\.?\s?m\.?)?$")
 
 
+# claude.ai writes "Resets at 2:50 PM" / "Resets Thursday 3:00 AM" in English and
+# "Se restablece a las 2:50 p.m." / "Se restablece el jueves, 3:00 a.m." in Spanish.
+_CONNECTOR = r"(?:in|en|dentro de|at|a las|a la|on|el)\s+"
+
+
 def _clean(text: str) -> str:
     t = text.strip().lower()
-    t = re.sub(r"^(resets?|reset|se resetea|reinicia)\s+", "", t)
-    t = re.sub(r"^(in|en|dentro de)\s+", "", t)
+    t = re.sub(r"^(resets?|se resetea|se restablece|se reinicia|reinicia|restablece)\s+", "", t)
+    t = re.sub("^" + _CONNECTOR, "", t)
     return t.strip(" .,")
 
 
@@ -102,8 +107,9 @@ def parse_reset(text: str, now: float, max_ahead_seconds: float) -> float:
     else:
         weekday = None
         first, _, rest = t.partition(" ")
+        first = first.rstrip(",")
         if first in WEEKDAY_BY_NAME:
-            weekday, t = WEEKDAY_BY_NAME[first], rest.strip()
+            weekday, t = WEEKDAY_BY_NAME[first], re.sub("^" + _CONNECTOR, "", rest.strip())
         hour, minute = _clock(t)
         base = datetime.fromtimestamp(now)
         candidate = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
