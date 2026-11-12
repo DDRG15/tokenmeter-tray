@@ -333,6 +333,10 @@ class UsageSink:
         if partial is not None:
             self._acc.merge(partial)
 
+    def mark_incomplete(self) -> None:
+        """The response was cut before its end: what the sink saw is a lower bound."""
+        self._terminal_incomplete = True
+
     # -- output ------------------------------------------------------------
 
     def finish(self, ts: float | None = None) -> UsageEvent | None:

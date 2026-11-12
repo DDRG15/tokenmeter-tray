@@ -79,6 +79,10 @@ class FakeUpstream(BaseHTTPRequestHandler):
             self._send(200, payload, "application/json")
         elif self.path.startswith("/v1/messages/stream-slow"):
             self._send_chunked_slow()
+        elif self.path.startswith("/v1/messages/body-after-delay"):
+            self._send_body_after_delay()
+        elif self.path.startswith("/v1/messages/stream-endless"):
+            self._send_endless_stream()
         elif self.path.startswith("/v1/messages/stream"):
             self._send(200, SSE_BODY, "text/event-stream")
         elif self.path.startswith("/v1/messages/boom"):
@@ -94,6 +98,46 @@ class FakeUpstream(BaseHTTPRequestHandler):
         self.send_header("x-upstream-secret", "value")
         self.end_headers()
         self.wfile.write(body)
+
+    # Set by the upstream handler when a write to the proxy fails, i.e. when the
+    # proxy closed its side of the connection.
+    upstream_write_failed = threading.Event()
+
+    def _send_body_after_delay(self):
+        """Headers first, the JSON body half a second later."""
+        body = json.dumps(ANTHROPIC_JSON).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("request-id", "req_011BodyAfterDelay")
+        self.end_headers()
+        self.wfile.flush()
+        time.sleep(0.5)
+        try:
+            self.wfile.write(body)
+            self.wfile.flush()
+        except OSError:
+            pass
+
+    def _send_endless_stream(self):
+        """`message_start`, then a pause, then heartbeats for up to 15 s.
+
+        A heartbeat write that fails means the proxy stopped reading from us.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("request-id", "req_011Endless")
+        self.end_headers()
+        first = SSE_BODY.split(b"event: message_delta")[0]
+        beats = [first] + [b": ping\n\n"] * 300
+        try:
+            for i, part in enumerate(beats):
+                self.wfile.write(b"%X\r\n%s\r\n" % (len(part), part))
+                self.wfile.flush()
+                time.sleep(0.5 if i == 0 else 0.05)
+        except OSError:
+            FakeUpstream.upstream_write_failed.set()
 
     def _send_chunked_slow(self):
         """Two chunks half a second apart, in real chunked encoding."""
@@ -249,6 +293,70 @@ def test_chunks_reach_the_client_before_the_upstream_finishes(proxy):
 
     time.sleep(0.3)  # the record happens after the body is closed
     assert store.totals_since(0).output_tokens == 555
+
+
+def wait_for(predicate, timeout=15.0):
+    deadline = time.time() + timeout
+    while not predicate() and time.time() < deadline:
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_usage_is_recorded_when_the_client_leaves_before_the_body(proxy):
+    """The client reads the status line and hangs up; the body is still in flight.
+
+    The proxy only learns the client is gone when it tries to write the body.
+    The provider already billed the call, so the usage must still be recorded.
+    """
+    collector, store = proxy
+    conn = http.client.HTTPConnection(collector.host, collector.port, timeout=15)
+    conn.request("POST", "/anthropic/v1/messages/body-after-delay", body=b"{}",
+                 headers={"Content-Type": "application/json"})
+    assert conn.getresponse().status == 200
+    conn.close()
+
+    assert wait_for(lambda: store.totals_since(0).calls >= 1), \
+        "the proxy lost the usage of a call whose client had already left"
+    time.sleep(0.3)  # a second record would show up here
+
+    totals = store.totals_since(0)
+    assert totals.calls == 1
+    assert totals.input_tokens == 1234
+    assert totals.output_tokens == 87
+    assert totals.cache_write_tokens == 512
+    assert totals.cache_read_tokens == 20480
+    assert totals.incomplete_calls == 0, "the whole body was read, so the usage is complete"
+    assert collector.stats.missing_usage == 0
+    assert collector.stats.errors == 0, "a client leaving is not an upstream error"
+
+
+def test_stream_cut_by_the_client_is_recorded_as_incomplete_and_upstream_is_released(proxy):
+    """The client hangs up mid-stream.
+
+    What was seen is kept and marked incomplete, and the proxy stops reading
+    from the upstream: draining would keep the provider generating tokens for a
+    reader that already left.
+    """
+    collector, store = proxy
+    FakeUpstream.upstream_write_failed.clear()
+    conn = http.client.HTTPConnection(collector.host, collector.port, timeout=15)
+    conn.request("POST", "/anthropic/v1/messages/stream-endless", body=b"{}",
+                 headers={"Content-Type": "application/json"})
+    resp = conn.getresponse()
+    assert resp.status == 200
+    assert resp.read(20).startswith(b"event: message_start"), "message_start did not arrive"
+    conn.close()
+
+    assert wait_for(lambda: store.totals_since(0).calls >= 1), \
+        "the proxy lost the usage of a stream the client abandoned"
+    assert FakeUpstream.upstream_write_failed.wait(5.0), \
+        "the proxy kept the upstream connection open after the client left"
+
+    totals = store.totals_since(0)
+    assert totals.calls == 1
+    assert totals.input_tokens == 1000, "the input usage seen in message_start is kept"
+    assert totals.incomplete_calls == 1, "a cut response must be marked incomplete"
+    assert collector.stats.missing_usage == 1
 
 
 def test_upstream_error_is_forwarded_and_not_counted(proxy):
