@@ -12,8 +12,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Date of the table. Prices change; if this is very old, check it at
-# https://platform.claude.com/docs/en/about-claude/pricing
+# Date every block of the table below was last checked against its source.
+# Prices change; if this is very old, check each block at the URL named in the
+# comment above it (Anthropic: https://platform.claude.com/docs/en/about-claude/pricing,
+# OpenAI: https://developers.openai.com/api/docs/pricing).
 VERIFIED_ON = "2026-11-12"
 
 # Cache multipliers relative to the input price.
@@ -33,6 +35,8 @@ CACHE_READ_MULTIPLIER = 0.10
 # instead of repeating the literals in the table below.
 CACHE_READ_MULTIPLIER_FABLE_5_1_PLUS = 0.025
 CACHE_READ_MULTIPLIER_OPUS_SONNET_5_5 = 0.05
+# OpenAI: cached input / input from the published table ($0.10 / $2.00).
+CACHE_READ_MULTIPLIER_GPT_6_1_SOL = 0.05
 
 
 @dataclass(frozen=True)
@@ -63,9 +67,9 @@ class Price:
 
 # Only models with a published and verified price. No guesses.
 #
-# Source: https://platform.claude.com/docs/en/about-claude/pricing (model
-# pricing table and "Long context pricing"), model ids from
-# https://platform.claude.com/docs/en/models/overview.
+# Block 1, Anthropic. Source: https://platform.claude.com/docs/en/about-claude/pricing
+# (model pricing table and "Long context pricing"), model ids from
+# https://platform.claude.com/docs/en/models/overview. Fetched 2026-11-12.
 #
 # Haiku 5.5 is priced by prompt length: $0.10 / $0.50 up to 100,000 prompt
 # tokens and $0.50 / $2.50 above that, decided per request. `cost_usd` receives
@@ -101,6 +105,26 @@ PRICES: dict[str, Price] = {
     "claude-sonnet-4-5": Price(3.00, 15.00),
     "claude-haiku-5-5": Price(0.10, 0.50, lower_bound=True),
     "claude-haiku-4-5": Price(1.00, 5.00),
+    # Block 2, OpenAI (the models Codex reports). Source:
+    # https://developers.openai.com/api/docs/pricing (reached from
+    # https://platform.openai.com/docs/pricing), Standard tier, short context.
+    # Fetched 2026-11-12. Batch, Flex, Fast and Ultrafast are not used.
+    #
+    # The page prices a request above 272K input tokens at a higher rate
+    # (input 2x, cached input 2x, output 1.5x on every model below), decided
+    # per request, so these are lower bounds like Haiku 5.5. Cache reads are
+    # cached-input / input from the page; cache writes keep the default 1.25x,
+    # which is OpenAI's 30-minute write price (the 12-hour write is 2.5x, but
+    # Codex records carry no TTL). Codex stores input without the cached part
+    # and reasoning inside output, which is what these rates apply to.
+    #
+    # `codex-auto-review` is not on the page and stays unpriced.
+    "gpt-6-astra": Price(10.00, 50.00, lower_bound=True),
+    "gpt-6.1-sol": Price(
+        2.00, 10.00, cache_read_multiplier=CACHE_READ_MULTIPLIER_GPT_6_1_SOL,
+        lower_bound=True),
+    "gpt-6-sol": Price(2.00, 10.00, lower_bound=True),
+    "gpt-6-luna": Price(0.10, 0.50, lower_bound=True),
 }
 
 # Platform prefixes: Bedrock (`anthropic.`, regional and global inference

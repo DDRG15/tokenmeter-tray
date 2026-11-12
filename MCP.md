@@ -50,7 +50,7 @@ Credentials are never read. Claude billing stays unknown; Codex can use plan
 metadata in its usage records. An API equivalent is an estimate rather than
 an invoice, priced one local day at a time (so a promotional rate applies only
 to the days it was in force), and unknown model prices are reported as partial. A model
-billed in per-request price tiers (Claude Haiku 5.5) is priced at its base tier, so its
+billed in per-request price tiers (Claude Haiku 5.5, the OpenAI GPT-6 models) is priced at its base tier, so its
 amount is only a minimum: its row carries `lower_bound: true` and a `cost_text` starting
 with `≥`, and every total that includes it (`api_equivalent`, `api_spend`,
 `subscription_equivalent`, each billing group) carries `lower_bound: true`,

@@ -154,6 +154,20 @@ def test_the_lower_bound_marks_the_api_and_subscription_split(tmp_path):
     assert cost["subscription_equivalent"]["lower_bound"] is False
 
 
+def test_a_codex_model_is_a_minimum_and_an_unlisted_one_has_no_cost(tmp_path):
+    app = app_without_tk(tmp_path)
+    for key, model in (("a", "gpt-6-sol"), ("b", "codex-auto-review")):
+        app.store.add_event(UsageEvent(
+            ts=time.time() - 60, provider="openai", model=model, input_tokens=1_000_000,
+            output_tokens=0, source="codex", dedupe_key=key))
+    state = dashboard.build_state(app)
+    priced = next(m for m in state["models"] if m["model"] == "gpt-6-sol")
+    unpriced = next(m for m in state["models"] if m["model"] == "codex-auto-review")
+    assert priced["cost_text"] == "≥ $2.00" and priced["lower_bound"] is True
+    assert unpriced["cost"] is None and unpriced["cost_text"] == "—"
+    assert state["cost"]["partial"] is True and state["cost"]["lower_bound"] is True
+
+
 def test_undated_records_are_visible_in_the_status_text_and_the_health_list(tmp_path):
     from types import SimpleNamespace
     app = app_without_tk(tmp_path)

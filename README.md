@@ -540,7 +540,7 @@ itself returns, not estimated with a tokenizer.
 | Output | model price |
 | Cache write, 5-minute TTL | 1.25x input |
 | Cache write, 1-hour TTL | **2x input** |
-| Cache read | 0.1x input |
+| Cache read | 0.1x input (0.05x or 0.025x on some models) |
 
 The TTL matters: 1-hour cache writes and 5-minute cache writes use different
 multipliers. Applying the 5-minute multiplier to every write understates
@@ -560,9 +560,12 @@ change when you look at the same days later, after the promotion has ended.
 - **A model without a rate shows `—`** and the total is marked as partial. It is
   never estimated with another model's price.
 - **A model billed in per-request tiers shows a minimum.** Claude Haiku 5.5 costs
-  more above 100,000 prompt tokens, decided per request. Totals do not say which
-  requests crossed the threshold, so its row reads `≥ $…` and every total that
-  includes it is marked as partial.
+  more above 100,000 prompt tokens and the OpenAI GPT-6 models above 272,000,
+  decided per request. Totals do not say which requests crossed the threshold,
+  so the row reads `≥ $…` and every total that includes it is marked as partial.
+- **OpenAI prices cover only the models on OpenAI's pricing page** (Standard
+  tier). A Codex model that page does not list, such as `codex-auto-review`,
+  shows `—`.
 - **Consumption served by a subscription does not have to map 1:1** to API rates
   even when the tokens are the same.
 

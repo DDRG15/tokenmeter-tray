@@ -189,3 +189,76 @@ def test_format_cost_marks_a_minimum_and_leaves_exact_values_alone():
     assert format_cost(0.11) == format_usd(0.11) == "$0.11"
     assert format_cost(None, lower_bound=True) == "—"
     assert format_cost(None) == "—"
+
+
+# -- OpenAI / Codex models --------------------------------------------------
+# Rates from https://developers.openai.com/api/docs/pricing (Standard tier,
+# short context): input / cached input / output per million tokens.
+
+OPENAI_PUBLISHED = {
+    "gpt-6-astra": (10.00, 1.00, 50.00),
+    "gpt-6.1-sol": (2.00, 0.10, 10.00),
+    "gpt-6-sol": (2.00, 0.20, 10.00),
+    "gpt-6-luna": (0.10, 0.01, 0.50),
+}
+
+
+@pytest.mark.parametrize("model", sorted(OPENAI_PUBLISHED))
+def test_openai_models_are_priced_at_the_published_rates(model):
+    rate_in, rate_cached, rate_out = OPENAI_PUBLISHED[model]
+    one_m = dict(on_date="2026-11-12")
+    assert cost_usd(model, 1_000_000, 0, **one_m) == pytest.approx(rate_in)
+    assert cost_usd(model, 0, 1_000_000, **one_m) == pytest.approx(rate_out)
+    assert cost_usd(model, 0, 0, cache_read_tokens=1_000_000, **one_m) == pytest.approx(rate_cached)
+
+
+@pytest.mark.parametrize("model", sorted(OPENAI_PUBLISHED))
+def test_openai_prices_are_lower_bounds_because_long_context_costs_more(model):
+    """Above 272K input tokens the page charges a higher rate, per request."""
+    assert is_lower_bound(model)
+
+
+def test_cache_write_uses_the_30_minute_write_price():
+    """OpenAI's 30-minute write is 1.25x input; the table's default multiplier."""
+    assert cost_usd("gpt-6-sol", 0, 0, cache_write_tokens=1_000_000,
+                    on_date="2026-11-12") == pytest.approx(2.50)
+    assert cost_usd("gpt-6-astra", 0, 0, cache_write_tokens=1_000_000,
+                    on_date="2026-11-12") == pytest.approx(12.50)
+
+
+def test_each_codex_id_resolves_to_itself_and_no_neighbour():
+    for model in OPENAI_PUBLISHED:
+        assert normalize(model) == model
+    assert normalize("GPT-6-SOL") == "gpt-6-sol"
+    # Same family, different price: they must never collapse into each other.
+    assert cost_usd("gpt-6-sol", 0, 0, cache_read_tokens=1_000_000, on_date="2026-11-12") != \
+        cost_usd("gpt-6.1-sol", 0, 0, cache_read_tokens=1_000_000, on_date="2026-11-12")
+    assert normalize("gpt-6") == "gpt-6" and cost_usd("gpt-6", 1_000, 1_000) is None
+
+
+def test_a_codex_model_missing_from_the_official_page_stays_unpriced():
+    assert normalize("codex-auto-review") == "codex-auto-review"
+    assert cost_usd("codex-auto-review", 1_000_000, 1_000_000) is None
+    assert not is_lower_bound("codex-auto-review")
+    # A third-party route is not the official page.
+    assert cost_usd("openai/gpt-6-sol", 1_000, 1_000) is None
+
+
+def test_codex_usage_is_priced_without_counting_cache_or_reasoning_twice():
+    """Codex stores input net of cache hits and reasoning inside output."""
+    from tokenmeter.collectors.codex import parse_record
+
+    record = {"timestamp": "2026-11-12T12:00:00Z", "type": "token_usage_record", "payload": {
+        "response_id": "resp_price", "usage": {
+            "input_tokens": 1_200_000, "cached_input_tokens": 200_000,
+            "cache_write_input_tokens": 0, "output_tokens": 300_000,
+            "reasoning_output_tokens": 100_000, "total_tokens": 1_500_000}}}
+    event, undated = parse_record(record, "gpt-6.1-sol", "subscription", "pro")
+    assert not undated
+    assert (event.input_tokens, event.cache_read_tokens, event.output_tokens) == (
+        1_000_000, 200_000, 300_000)
+    cost = cost_usd(event.model, event.input_tokens, event.output_tokens,
+                    event.cache_write_tokens, event.cache_read_tokens, on_date="2026-11-12")
+    # 1.0M fresh input at $2 + 0.2M cached at $0.10 + 0.3M output (reasoning
+    # included) at $10.
+    assert cost == pytest.approx(2.00 + 0.02 + 3.00)
