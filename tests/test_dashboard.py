@@ -81,6 +81,93 @@ def test_percent_level_and_models(tmp_path):
     assert state["cost"]["text"].endswith("(partial)")
 
 
+def test_a_tiered_model_is_shown_as_a_minimum_and_makes_the_total_partial(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "haiku", model="claude-haiku-5-5")
+    call(app, 1_000_000, "opus", model="claude-opus-5")
+    state = dashboard.build_state(app)
+
+    haiku = next(m for m in state["models"] if m["model"] == "claude-haiku-5-5")
+    opus = next(m for m in state["models"] if m["model"] == "claude-opus-5")
+    assert haiku["lower_bound"] is True
+    assert haiku["cost"] == pytest.approx(0.10)
+    assert haiku["cost_text"] == "≥ $0.10"
+    # An exact model next to it stays exact.
+    assert opus["lower_bound"] is False and opus["cost_text"] == "$5.00"
+
+    cost = state["cost"]
+    assert cost["value"] == pytest.approx(5.10)
+    assert cost["partial"] is True and cost["lower_bound"] is True
+    assert cost["text"] == "$5.10 (partial)"
+    assert "lower bound" in cost["note"] and "no price" not in cost["note"]
+    json.dumps(state)
+
+
+def test_only_exact_prices_leave_the_total_exact(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "opus", model="claude-opus-5")
+    state = dashboard.build_state(app)
+    assert state["cost"]["partial"] is False and state["cost"]["lower_bound"] is False
+    assert state["cost"]["text"] == "$5.00"
+    assert state["models"][0]["lower_bound"] is False
+
+
+def test_a_lower_bound_and_a_missing_price_are_reported_separately(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "haiku", model="claude-haiku-5-5")
+    call(app, 1_000, "none", model="model-without-price")
+    state = dashboard.build_state(app)
+    unpriced = next(m for m in state["models"] if m["model"] == "model-without-price")
+    assert unpriced["lower_bound"] is False and unpriced["cost_text"] == "—"
+    assert state["cost"]["partial"] is True and state["cost"]["lower_bound"] is True
+    assert "no price" in state["cost"]["note"] and "lower bound" in state["cost"]["note"]
+
+
+def test_a_missing_price_alone_is_not_a_lower_bound(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000, "none", model="model-without-price")
+    cost = dashboard.build_state(app)["cost"]
+    assert cost["partial"] is True and cost["lower_bound"] is False
+    assert "lower bound" not in cost["note"]
+
+
+def test_the_lower_bound_reaches_the_billing_groups_and_the_history(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "haiku", model="claude-haiku-5-5")
+    state = dashboard.build_state(app)
+    (group,) = state["billing"]
+    assert group["lower_bound"] is True and group["cost_text"].endswith("(partial)")
+    hist = dashboard.build_history(app, 7)
+    assert hist["models"][0]["lower_bound"] is True
+    assert hist["models"][0]["cost_text"].startswith("≥ ")
+    assert hist["cost"]["lower_bound"] is True and hist["cost"]["partial"] is True
+
+
+def test_the_lower_bound_marks_the_api_and_subscription_split(tmp_path):
+    app = app_without_tk(tmp_path)
+    app.store.add_event(UsageEvent(
+        ts=time.time() - 60, provider="anthropic", model="claude-haiku-5-5",
+        input_tokens=1_000_000, output_tokens=0, source="transcript", dedupe_key="a",
+        billing="api"))
+    cost = dashboard.build_state(app)["cost"]
+    assert cost["api_spend"]["lower_bound"] is True and cost["api_spend"]["partial"] is True
+    assert cost["subscription_equivalent"]["lower_bound"] is False
+
+
+def test_a_codex_model_is_a_minimum_and_an_unlisted_one_has_no_cost(tmp_path):
+    app = app_without_tk(tmp_path)
+    for key, model in (("a", "gpt-6-sol"), ("b", "codex-auto-review")):
+        app.store.add_event(UsageEvent(
+            ts=time.time() - 60, provider="openai", model=model, input_tokens=1_000_000,
+            output_tokens=0, source="codex", dedupe_key=key))
+    state = dashboard.build_state(app)
+    priced = next(m for m in state["models"] if m["model"] == "gpt-6-sol")
+    unpriced = next(m for m in state["models"] if m["model"] == "codex-auto-review")
+    assert priced["cost_text"] == "≥ $2.00" and priced["lower_bound"] is True
+    assert unpriced["cost"] is None and unpriced["cost_text"] == "—"
+    assert state["cost"]["partial"] is True and state["cost"]["lower_bound"] is True
+
+
 def test_undated_records_are_visible_in_the_status_text_and_the_health_list(tmp_path):
     from types import SimpleNamespace
     app = app_without_tk(tmp_path)
@@ -141,13 +228,17 @@ def _local_noon(year, month, day):
     return datetime(year, month, day, 12).timestamp()
 
 
-def test_history_prices_each_day_at_the_rates_of_that_day(tmp_path):
-    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+def test_history_prices_each_day_at_the_rates_of_that_day(tmp_path, monkeypatch):
+    """A promotional model costs 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    from tokenmeter.pricing import PRICES, Price
+    monkeypatch.setitem(PRICES, "claude-promo-test", Price(
+        3.00, 15.00, intro_input_per_mtok=2.00, intro_output_per_mtok=10.00,
+        intro_until="2026-08-31"))
     app = app_without_tk(tmp_path)
     for key, ts in (("last-intro-day", _local_noon(2026, 8, 31)),
                     ("first-full-price-day", _local_noon(2026, 9, 1))):
         app.store.add_event(UsageEvent(
-            ts=ts, provider="anthropic", model="claude-sonnet-5", input_tokens=1_000_000,
+            ts=ts, provider="anthropic", model="claude-promo-test", input_tokens=1_000_000,
             output_tokens=0, source="transcript", dedupe_key=f"req:{key}"))
     hist = dashboard.build_history(app, 7, now=_local_noon(2026, 9, 2))
     # 2.00 for the 31st plus 3.00 for the 1st. Pricing the whole range with a

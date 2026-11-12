@@ -1,6 +1,8 @@
 import pytest
 
-from tokenmeter.pricing import cost_usd, format_usd, normalize
+from tokenmeter import pricing
+from tokenmeter.pricing import (PRICES, Price, cost_usd, format_cost, format_usd,
+                                is_lower_bound, normalize)
 
 
 def test_normalize_strips_platform_prefixes_and_date_suffixes():
@@ -45,11 +47,20 @@ def test_an_incoherent_breakdown_never_reduces_the_cost():
     assert cost == 1_000 * 5e-6 * 2.0
 
 
-def test_sonnet_5_intro_pricing_expires():
-    inside = cost_usd("claude-sonnet-5", 1_000_000, 0, on_date="2026-08-12")
-    outside = cost_usd("claude-sonnet-5", 1_000_000, 0, on_date="2026-09-01")
+def test_intro_pricing_applies_only_until_its_end_date(monkeypatch):
+    monkeypatch.setitem(PRICES, "claude-promo-test", Price(
+        3.00, 15.00, intro_input_per_mtok=2.00, intro_output_per_mtok=10.00,
+        intro_until="2026-08-31"))
+    inside = cost_usd("claude-promo-test", 1_000_000, 0, on_date="2026-08-31")
+    outside = cost_usd("claude-promo-test", 1_000_000, 0, on_date="2026-09-01")
     assert inside == 2.0
     assert outside == 3.0
+
+
+def test_sonnet_5_is_priced_at_its_standard_rate_on_every_date():
+    """The $2 / $10 launch price became permanent; no increase on 2026-09-01."""
+    for day in ("2026-08-31", "2026-09-01", "2026-11-12"):
+        assert cost_usd("claude-sonnet-5", 1_000_000, 1_000_000, on_date=day) == 12.0
 
 
 def test_unknown_model_returns_none_never_a_guess():
@@ -77,3 +88,177 @@ def test_openrouter_cost_prices_the_cache_write():
     cost = cost_usd("anthropic/claude-haiku-4.5", 94, 2, cache_write_tokens=100,
                      on_date="2026-10-14")
     assert cost == pytest.approx((94 + 2 * 5 + 100 * 1.25) / 1_000_000)
+
+
+def test_a_version_segment_is_not_a_date_suffix():
+    """`claude-opus-5-5` is its own model, not a snapshot of `claude-opus-5`."""
+    assert normalize("claude-opus-5-5") == "claude-opus-5-5"
+    assert normalize("claude-sonnet-5-5") == "claude-sonnet-5-5"
+    assert normalize("claude-haiku-5-5") == "claude-haiku-5-5"
+    assert normalize("claude-opus-5-5-20261001") == "claude-opus-5-5"
+
+
+def test_opus_5_5_uses_its_own_rates_not_opus_5():
+    cost = cost_usd("claude-opus-5-5", 1_000_000, 1_000_000, on_date="2026-11-12")
+    assert cost == 24.0  # $4 + $20
+    assert cost != cost_usd("claude-opus-5", 1_000_000, 1_000_000, on_date="2026-11-12")
+
+
+def test_sonnet_5_5_and_haiku_5_5_are_priced():
+    assert cost_usd("claude-sonnet-5-5", 1_000_000, 1_000_000,
+                    on_date="2026-11-12") == 12.0  # $2 + $10
+    assert cost_usd("claude-haiku-5-5", 1_000_000, 1_000_000,
+                    on_date="2026-11-12") == pytest.approx(0.60)  # $0.10 + $0.50
+
+
+def test_fable_and_mythos_versions_are_priced_separately():
+    assert cost_usd("claude-fable-5-2", 1_000_000, 1_000_000, on_date="2026-11-12") == 48.0
+    assert cost_usd("claude-mythos-5-2", 1_000_000, 1_000_000, on_date="2026-11-12") == 48.0
+    assert cost_usd("claude-fable-5-1", 1_000_000, 1_000_000, on_date="2026-11-12") == 60.0
+    assert cost_usd("claude-mythos-5-1", 1_000_000, 1_000_000, on_date="2026-11-12") == 60.0
+    assert cost_usd("claude-fable-5", 1_000_000, 1_000_000, on_date="2026-11-12") == 60.0
+
+
+def test_cache_read_multiplier_is_per_model():
+    """Cache hits: 0.1x by default, 0.05x on Opus/Sonnet 5.5, 0.025x on Fable 5.1+."""
+    one_m = dict(input_tokens=0, output_tokens=0, cache_read_tokens=1_000_000,
+                 on_date="2026-11-12")
+    assert cost_usd("claude-opus-5", **one_m) == pytest.approx(0.50)
+    assert cost_usd("claude-opus-5-5", **one_m) == pytest.approx(0.20)
+    assert cost_usd("claude-sonnet-5-5", **one_m) == pytest.approx(0.10)
+    assert cost_usd("claude-haiku-5-5", **one_m) == pytest.approx(0.01)
+    assert cost_usd("claude-fable-5-2", **one_m) == pytest.approx(0.20)
+    assert cost_usd("claude-fable-5-1", **one_m) == pytest.approx(0.25)
+    assert cost_usd("claude-fable-5", **one_m) == pytest.approx(1.00)
+
+
+def test_a_dated_snapshot_still_resolves():
+    assert normalize("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
+    assert cost_usd("claude-haiku-4-5-20251001", 1_000_000, 0,
+                    on_date="2026-11-12") == 1.0
+
+
+def test_an_unknown_model_with_version_segments_is_never_priced():
+    assert normalize("claude-foo-9-9") == "claude-foo-9-9"
+    assert cost_usd("claude-foo-9-9", 1_000_000, 1_000_000) is None
+    assert cost_usd("claude-opus-9-9", 1_000_000, 1_000_000) is None
+    assert cost_usd("claude-opus-5-5-foo", 1_000_000, 1_000_000) is None
+
+
+def test_platform_aliases_resolve_to_the_exact_version():
+    assert normalize("anthropic.claude-opus-5-5") == "claude-opus-5-5"
+    assert normalize("global.anthropic.claude-fable-5-2") == "claude-fable-5-2"
+    assert normalize("us.anthropic.claude-haiku-4-5-20251001-v1:0") == "claude-haiku-4-5"
+    assert normalize("claude-haiku-4-5@20251001") == "claude-haiku-4-5"
+    assert normalize("claude-opus-5-5@20261001") == "claude-opus-5-5"
+    assert normalize("anthropic/claude-opus-5.5") == "claude-opus-5-5"
+    assert normalize("anthropic/claude-sonnet-5.5:thinking") == "claude-sonnet-5-5"
+    assert normalize("anthropic/claude-haiku-5.5") == "claude-haiku-5-5"
+
+
+def test_verified_date_is_iso_and_not_in_the_future():
+    from datetime import date
+    assert date.fromisoformat(pricing.VERIFIED_ON) <= date.today()
+
+
+def test_only_tiered_models_are_lower_bounds():
+    """Haiku 5.5 bills above 100K prompt tokens at a higher rate, per request."""
+    assert PRICES["claude-haiku-5-5"].lower_bound is True
+    assert is_lower_bound("claude-haiku-5-5")
+    assert is_lower_bound("anthropic.claude-haiku-5-5-20261001-v1:0")
+    assert not is_lower_bound("claude-haiku-4-5")
+    assert not is_lower_bound("claude-opus-5-5")
+    assert [m for m, price in PRICES.items() if price.lower_bound and m.startswith("claude-")] == [
+        "claude-haiku-5-5"]
+
+
+def test_a_model_without_a_price_is_not_a_lower_bound():
+    assert is_lower_bound("made-up-model") is False
+    assert is_lower_bound("") is False
+
+
+def test_lower_bound_does_not_change_the_base_tier_amount():
+    """The flag labels the figure; the figure is still the base tier."""
+    assert cost_usd("claude-haiku-5-5", 1_000_000, 1_000_000,
+                    on_date="2026-11-12") == pytest.approx(0.60)
+
+
+def test_format_cost_marks_a_minimum_and_leaves_exact_values_alone():
+    assert format_cost(0.11, lower_bound=True) == "≥ $0.11"
+    assert format_cost(0.0031, lower_bound=True) == "≥ $0.0031"
+    assert format_cost(0.11) == format_usd(0.11) == "$0.11"
+    assert format_cost(None, lower_bound=True) == "—"
+    assert format_cost(None) == "—"
+
+
+# -- OpenAI / Codex models --------------------------------------------------
+# Rates from https://developers.openai.com/api/docs/pricing (Standard tier,
+# short context): input / cached input / output per million tokens.
+
+OPENAI_PUBLISHED = {
+    "gpt-6-astra": (10.00, 1.00, 50.00),
+    "gpt-6.1-sol": (2.00, 0.10, 10.00),
+    "gpt-6-sol": (2.00, 0.20, 10.00),
+    "gpt-6-luna": (0.10, 0.01, 0.50),
+}
+
+
+@pytest.mark.parametrize("model", sorted(OPENAI_PUBLISHED))
+def test_openai_models_are_priced_at_the_published_rates(model):
+    rate_in, rate_cached, rate_out = OPENAI_PUBLISHED[model]
+    one_m = dict(on_date="2026-11-12")
+    assert cost_usd(model, 1_000_000, 0, **one_m) == pytest.approx(rate_in)
+    assert cost_usd(model, 0, 1_000_000, **one_m) == pytest.approx(rate_out)
+    assert cost_usd(model, 0, 0, cache_read_tokens=1_000_000, **one_m) == pytest.approx(rate_cached)
+
+
+@pytest.mark.parametrize("model", sorted(OPENAI_PUBLISHED))
+def test_openai_prices_are_lower_bounds_because_long_context_costs_more(model):
+    """Above 272K input tokens the page charges a higher rate, per request."""
+    assert is_lower_bound(model)
+
+
+def test_cache_write_uses_the_30_minute_write_price():
+    """OpenAI's 30-minute write is 1.25x input; the table's default multiplier."""
+    assert cost_usd("gpt-6-sol", 0, 0, cache_write_tokens=1_000_000,
+                    on_date="2026-11-12") == pytest.approx(2.50)
+    assert cost_usd("gpt-6-astra", 0, 0, cache_write_tokens=1_000_000,
+                    on_date="2026-11-12") == pytest.approx(12.50)
+
+
+def test_each_codex_id_resolves_to_itself_and_no_neighbour():
+    for model in OPENAI_PUBLISHED:
+        assert normalize(model) == model
+    assert normalize("GPT-6-SOL") == "gpt-6-sol"
+    # Same family, different price: they must never collapse into each other.
+    assert cost_usd("gpt-6-sol", 0, 0, cache_read_tokens=1_000_000, on_date="2026-11-12") != \
+        cost_usd("gpt-6.1-sol", 0, 0, cache_read_tokens=1_000_000, on_date="2026-11-12")
+    assert normalize("gpt-6") == "gpt-6" and cost_usd("gpt-6", 1_000, 1_000) is None
+
+
+def test_a_codex_model_missing_from_the_official_page_stays_unpriced():
+    assert normalize("codex-auto-review") == "codex-auto-review"
+    assert cost_usd("codex-auto-review", 1_000_000, 1_000_000) is None
+    assert not is_lower_bound("codex-auto-review")
+    # A third-party route is not the official page.
+    assert cost_usd("openai/gpt-6-sol", 1_000, 1_000) is None
+
+
+def test_codex_usage_is_priced_without_counting_cache_or_reasoning_twice():
+    """Codex stores input net of cache hits and reasoning inside output."""
+    from tokenmeter.collectors.codex import parse_record
+
+    record = {"timestamp": "2026-11-12T12:00:00Z", "type": "token_usage_record", "payload": {
+        "response_id": "resp_price", "usage": {
+            "input_tokens": 1_200_000, "cached_input_tokens": 200_000,
+            "cache_write_input_tokens": 0, "output_tokens": 300_000,
+            "reasoning_output_tokens": 100_000, "total_tokens": 1_500_000}}}
+    event, undated = parse_record(record, "gpt-6.1-sol", "subscription", "pro")
+    assert not undated
+    assert (event.input_tokens, event.cache_read_tokens, event.output_tokens) == (
+        1_000_000, 200_000, 300_000)
+    cost = cost_usd(event.model, event.input_tokens, event.output_tokens,
+                    event.cache_write_tokens, event.cache_read_tokens, on_date="2026-11-12")
+    # 1.0M fresh input at $2 + 0.2M cached at $0.10 + 0.3M output (reasoning
+    # included) at $10.
+    assert cost == pytest.approx(2.00 + 0.02 + 3.00)

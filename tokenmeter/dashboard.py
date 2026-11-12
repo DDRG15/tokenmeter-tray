@@ -19,7 +19,7 @@ from . import __version__
 from .billing import label as billing_label
 from .models import BILLING_API, BILLING_SUBSCRIPTION
 from .history import RANGES_DAYS, daily_series, local_midnight, summarize
-from .pricing import cost_usd, format_usd, VERIFIED_ON
+from .pricing import cost_usd, format_cost, format_usd, is_lower_bound, VERIFIED_ON
 from .store import ModelTotals, Totals, merge_model_days
 
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -46,8 +46,11 @@ def level(percent: float, warn: int, danger: int, active: bool = True) -> str:
     return "ok"
 
 
-def priced_models(day_rows) -> list[tuple[ModelTotals, float | None]]:
-    """(totals, API-equivalent cost) per (model, provider, billing, plan).
+def priced_models(day_rows) -> list[tuple[ModelTotals, float | None, bool]]:
+    """(totals, API-equivalent cost, lower bound) per (model, provider, billing, plan).
+
+    `lower bound` is True when the cost exists but can only be a minimum (the
+    model is billed in per-request tiers that daily totals cannot tell apart).
 
     The cost is computed per local day and summed, so a promotional price only
     applies to the days it was in force. Aggregated rows lose that: pricing a
@@ -68,31 +71,43 @@ def priced_models(day_rows) -> list[tuple[ModelTotals, float | None]]:
                 cost = None
                 break
             cost += day_cost
-        priced.append((totals, cost))
+        priced.append((totals, cost, cost is not None and is_lower_bound(totals.model)))
     return priced
 
 
 class _Sum:
-    """Sum of costs that remembers whether a price was missing."""
+    """Sum of costs that remembers whether a price was missing or only a minimum.
+
+    A sum is partial when any term has no price or is a lower bound: in both
+    cases the true total is not what `value` says. `lower_bound` tells the two
+    apart: a missing price leaves the real cost above `value` by an unknown
+    amount, a lower bound says `value` is a floor.
+    """
 
     def __init__(self) -> None:
-        self.value, self.partial, self.any = 0.0, False, False
+        self.value, self.missing, self.lower_bound, self.any = 0.0, False, False, False
 
-    def add(self, c: float | None) -> None:
+    @property
+    def partial(self) -> bool:
+        return self.missing or self.lower_bound
+
+    def add(self, c: float | None, lower_bound: bool = False) -> None:
         self.any = True
         if c is None:
-            self.partial = True
+            self.missing = True
         else:
             self.value += c
+            self.lower_bound = self.lower_bound or lower_bound
 
     def as_dict(self) -> dict:
-        if self.any and self.partial and self.value == 0:
-            return {"value": None, "text": "—", "partial": True}
+        if self.any and self.missing and self.value == 0:
+            return {"value": None, "text": "—", "partial": True, "lower_bound": False}
         text = format_usd(self.value) + (" (partial)" if self.partial else "")
-        return {"value": self.value, "text": text, "partial": self.partial}
+        return {"value": self.value, "text": text, "partial": self.partial,
+                "lower_bound": self.lower_bound}
 
 
-ZERO = {"value": 0.0, "text": format_usd(0.0), "partial": False}
+ZERO = {"value": 0.0, "text": format_usd(0.0), "partial": False, "lower_bound": False}
 
 
 def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
@@ -106,17 +121,17 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
     included in the plan: only the former is money spent.
     """
     rows = priced_models(day_rows)
-    total_io = sum(r.io_tokens for r, _ in rows) or 1
+    total_io = sum(r.io_tokens for r, _, _ in rows) or 1
     out, total = [], _Sum()
     api, sub = _Sum(), _Sum()
     unknown = False
     groups: dict[tuple[str, str], dict] = {}
-    for row, c in rows:
-        total.add(c)
+    for row, c, floor in rows:
+        total.add(c, floor)
         if row.billing == BILLING_API:
-            api.add(c)
+            api.add(c, floor)
         elif row.billing == BILLING_SUBSCRIPTION:
-            sub.add(c)
+            sub.add(c, floor)
         elif row.billing == "unknown":
             unknown = True
         out.append({
@@ -127,7 +142,8 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
             "io": row.io_tokens,
             "calls": row.calls,
             "cost": c,
-            "cost_text": format_usd(c),
+            "cost_text": format_cost(c, floor),
+            "lower_bound": floor,
             "share": row.io_tokens / total_io,
         })
         g = groups.setdefault((row.billing, row.plan), {
@@ -137,27 +153,30 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
         })
         g["calls"] += row.calls
         g["io"] += row.io_tokens
-        g["_sum"].add(c)
+        g["_sum"].add(c, floor)
 
     billing = []
     for g in sorted(groups.values(), key=lambda g: -g["io"]):
         d = g.pop("_sum").as_dict()
-        g["cost"], g["cost_text"] = d["value"], d["text"]
+        g["cost"], g["cost_text"], g["lower_bound"] = d["value"], d["text"], d["lower_bound"]
         billing.append(g)
 
     if not rows:
-        none = {"value": None, "text": "—", "partial": False}
-        cost = {"value": None, "text": "—", "partial": False, "note": "",
+        none = {"value": None, "text": "—", "partial": False, "lower_bound": False}
+        cost = {"value": None, "text": "—", "partial": False, "lower_bound": False, "note": "",
                 "api_spend": none, "subscription_equivalent": none}
     else:
         note = "what this work would cost at API rates; a subscription does not pay this"
-        if total.partial:
+        if total.missing:
             note += " · some model has no price"
+        if total.lower_bound:
+            note += " · some price is a lower bound"
         t = total.as_dict()
         cost = {
             "value": t["value"],
             "text": t["text"],
             "partial": t["partial"],
+            "lower_bound": t["lower_bound"],
             "note": note,
             # With no API calls, what was paid is a certain zero, not a "don't know".
             "api_spend": api.as_dict() if api.any else dict(ZERO),
