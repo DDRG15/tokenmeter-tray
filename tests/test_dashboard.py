@@ -141,13 +141,17 @@ def _local_noon(year, month, day):
     return datetime(year, month, day, 12).timestamp()
 
 
-def test_history_prices_each_day_at_the_rates_of_that_day(tmp_path):
-    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+def test_history_prices_each_day_at_the_rates_of_that_day(tmp_path, monkeypatch):
+    """A promotional model costs 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    from tokenmeter.pricing import PRICES, Price
+    monkeypatch.setitem(PRICES, "claude-promo-test", Price(
+        3.00, 15.00, intro_input_per_mtok=2.00, intro_output_per_mtok=10.00,
+        intro_until="2026-08-31"))
     app = app_without_tk(tmp_path)
     for key, ts in (("last-intro-day", _local_noon(2026, 8, 31)),
                     ("first-full-price-day", _local_noon(2026, 9, 1))):
         app.store.add_event(UsageEvent(
-            ts=ts, provider="anthropic", model="claude-sonnet-5", input_tokens=1_000_000,
+            ts=ts, provider="anthropic", model="claude-promo-test", input_tokens=1_000_000,
             output_tokens=0, source="transcript", dedupe_key=f"req:{key}"))
     hist = dashboard.build_history(app, 7, now=_local_noon(2026, 9, 2))
     # 2.00 for the 31st plus 3.00 for the 1st. Pricing the whole range with a

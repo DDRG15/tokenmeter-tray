@@ -556,7 +556,7 @@ change when you look at the same days later, after the promotion has ended.
 ### What remains uncertain
 
 - **Prices are a dated table** (`VERIFIED_ON` in `pricing.py`, verified on
-  2026-06-24). If they change, the number drifts until the table is updated.
+  2026-11-12). If they change, the number drifts until the table is updated.
 - **A model without a rate shows `—`** and the total is marked as partial. It is
   never estimated with another model's price.
 - **Consumption served by a subscription does not have to map 1:1** to API rates

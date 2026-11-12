@@ -248,20 +248,24 @@ def test_collector_status_reports_undated_records(tmp_path):
     assert summary["collectors"]["codex"]["events_undated"] == 0
 
 
-def _sonnet5_line(key, ts):
+def _promo_line(key, ts):
     line = json.loads(_claude_line(key, ts, input_tokens=1_000_000, output_tokens=0))
-    line["message"]["model"] = "claude-sonnet-5"
+    line["message"]["model"] = "claude-promo-test"
     line["message"]["usage"] = {"input_tokens": 1_000_000, "output_tokens": 0}
     return json.dumps(line) + "\n"
 
 
-def test_summary_prices_each_local_day_at_that_days_rates(tmp_path):
-    """claude-sonnet-5 cost 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+def test_summary_prices_each_local_day_at_that_days_rates(tmp_path, monkeypatch):
+    """A promotional model costs 2.00/Mtok input until 2026-08-31 and 3.00 after."""
+    from tokenmeter.pricing import PRICES, Price
+    monkeypatch.setitem(PRICES, "claude-promo-test", Price(
+        3.00, 15.00, intro_input_per_mtok=2.00, intro_output_per_mtok=10.00,
+        intro_until="2026-08-31"))
     noon = lambda *ymd: datetime(*ymd, 12).timestamp()  # local time, like the day grouping
     root = tmp_path / "claude"
     root.mkdir()
-    (root / "s.jsonl").write_text(_sonnet5_line("last_intro_day", noon(2026, 8, 31))
-                                  + _sonnet5_line("first_full_price_day", noon(2026, 9, 1)))
+    (root / "s.jsonl").write_text(_promo_line("last_intro_day", noon(2026, 8, 31))
+                                  + _promo_line("first_full_price_day", noon(2026, 9, 1)))
     summary = UsageQuery(root, None).summary(hours=72, now=noon(2026, 9, 2))
     assert summary["totals"]["calls"] == 2
     assert summary["api_equivalent"]["value"] == pytest.approx(5.0)
