@@ -505,7 +505,7 @@ Every call carries its billing type, detected automatically:
 |---|---|---|
 | **Subscription** (Pro, Max, Plus…) | Included in your quota | Claude Code or Codex login; OAuth token or JWT at the proxy |
 | **Paid API** | Every token is paid for | API key in the request (also when it goes through a local gateway) |
-| **Local** | Your own model, no cost | Local upstream **without** a credential (Ollama) |
+| **Local** | Your own model, no cost | Local upstream **without** a credential, or with an obvious placeholder one (`ollama`, `sk-local`, `lm-studio`: anything under 20 characters or a well-known dummy value). A real-looking key keeps it **Paid API**, so a local gateway in front of a paid API is not shown as free |
 | **Billing?** | Could not be determined | — |
 
 The window separates **API equivalent · billed via API** (what the calls billed

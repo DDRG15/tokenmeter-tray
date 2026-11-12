@@ -59,8 +59,77 @@ def test_proxy_requests():
 
 def test_a_local_gateway_with_a_key_is_api_not_local():
     """LiteLLM on localhost forwards to a paid API: "local, no cost" would be false."""
-    assert classify_request({"Authorization": "Bearer sk-litellm-x"},
+    assert classify_request({"Authorization": "Bearer sk-litellm-0123456789abcdefghij"},
                             "http://127.0.0.1:4000") == ("api", "")
+
+
+DUMMY_KEYS = ["ollama", "sk-local", "lm-studio", "not-needed", "sk-no-key-required", "EMPTY",
+              "dummy", "token-abc123", "x"]
+
+
+@pytest.mark.parametrize("key", DUMMY_KEYS)
+@pytest.mark.parametrize("upstream", ["http://127.0.0.1:11434", "http://localhost:1234", "http://[::1]:8080"])
+def test_a_dummy_key_to_a_local_upstream_is_local(key, upstream):
+    """Clients whose SDK insists on a key send one: it must not turn local usage into paid API."""
+    assert classify_request({"Authorization": f"Bearer {key}"}, upstream) == ("local", "")
+    assert classify_request({"x-api-key": key}, upstream) == ("local", "")
+    assert classify_request({"api-key": key}, upstream) == ("local", "")
+    assert classify_request({}, upstream, {"key": key}) == ("local", "")
+
+
+def test_a_listed_placeholder_is_local_even_when_it_is_long_enough_to_pass_for_a_key():
+    value = "sk-your-api-key-here"
+    assert len(value) >= 20
+    assert classify_request({"Authorization": f"Bearer {value.upper()}"}, "http://127.0.0.1:11434") == ("local", "")
+
+
+@pytest.mark.parametrize("key", [
+    "sk-litellm-0123456789abcdefghij",            # gateway virtual key
+    "sk-ant-api03-" + "a" * 90,                   # Anthropic
+    "sk-proj-" + "b" * 60,                        # OpenAI
+    "gsk_" + "c" * 52,                            # Groq
+    "x" * 20,                                     # unknown shape, long enough to be a key
+    "sk-ant-api03-secret",                        # short, but carries a vendor prefix
+])
+def test_a_real_looking_key_to_a_local_gateway_stays_api(key):
+    """LiteLLM on localhost forwards to a paid API: a real key keeps counting as money."""
+    assert classify_request({"Authorization": f"Bearer {key}"}, "http://127.0.0.1:4000") == ("api", "")
+    assert classify_request({"x-api-key": key}, "http://localhost:4000") == ("api", "")
+
+
+def test_a_real_key_anywhere_in_the_request_wins_over_a_dummy_one():
+    headers = {"x-api-key": "ollama", "Authorization": "Bearer sk-ant-api03-" + "a" * 90}
+    assert classify_request(headers, "http://127.0.0.1:4000") == ("api", "")
+    assert classify_request({"x-api-key": "ollama"}, "http://127.0.0.1:4000",
+                            {"key": "AIza" + "d" * 35}) == ("api", "")
+
+
+def test_a_subscription_credential_is_never_taken_for_a_placeholder():
+    assert classify_request({"Authorization": "Bearer sk-ant-oat01-a"},
+                            "http://127.0.0.1:4000") == ("subscription", "")
+    assert classify_request({"Authorization": "Bearer eyJ.e30.x"},
+                            "http://127.0.0.1:4000") == ("subscription", "")
+
+
+@pytest.mark.parametrize("key", DUMMY_KEYS)
+def test_a_dummy_key_to_a_remote_upstream_is_classified_as_before(key):
+    """Only a local destination makes a placeholder harmless."""
+    assert classify_request({"Authorization": f"Bearer {key}"}, "https://api.openai.com") == ("api", "")
+    assert classify_request({"x-api-key": key}, "https://api.anthropic.com") == ("api", "")
+    assert classify_request({}, "https://generativelanguage.googleapis.com", {"key": key}) == ("api", "")
+
+
+def test_a_blank_credential_to_a_remote_upstream_stays_unknown():
+    assert classify_request({"x-api-key": "  "}, "https://api.openai.com") == UNKNOWN
+
+
+def test_the_proxy_records_a_dummy_key_to_a_local_upstream_as_local(proxy):  # noqa: F811
+    collector, store = proxy
+    post(collector, "/anthropic/v1/messages", headers={"Authorization": "Bearer ollama"})
+    deadline = time.time() + 15
+    while time.time() < deadline and not stored_billing(store):
+        time.sleep(0.05)
+    assert [tuple(r) for r in stored_billing(store)] == [("local", "")]
 
 
 # -- Claude Code authentication on disk --------------------------------------------------

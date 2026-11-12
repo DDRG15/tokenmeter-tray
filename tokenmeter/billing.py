@@ -38,6 +38,23 @@ UNKNOWN: Billing = (BILLING_UNKNOWN, "")
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
 
+# Below this length a credential is a placeholder, not a key. The longest dummy
+# values in client documentation (`sk-no-key-required`) are 18 characters; real
+# provider and gateway keys are longer than 20.
+MIN_REAL_KEY_LENGTH = 20
+# Prefixes issued by the providers in `DEFAULT_UPSTREAMS` and their neighbours.
+# A value that starts with one is a key, not a placeholder.
+VENDOR_KEY_PREFIXES = ("sk-ant-", "sk-proj-", "sk-svcacct-", "sk-admin-", "sk-or-",
+                       "gsk_", "aiza", "xai-")
+# Well-known dummy values, matched case-insensitively. The length rule already
+# covers the short ones; this set names them and also catches a longer variant.
+PLACEHOLDER_CREDENTIALS = frozenset({
+    "ollama", "lm-studio", "lmstudio", "local", "sk-local", "not-needed",
+    "no-key", "no-key-required", "sk-no-key-required", "none", "null", "empty",
+    "dummy", "sk-dummy", "api-key", "your-api-key", "your-api-key-here",
+    "sk-your-api-key-here", "sk-xxx", "token-abc123",
+})
+
 
 def classify_credential(value: str) -> str:
     """Billing type according to the shape of a credential (without the "Bearer")."""
@@ -52,24 +69,67 @@ def classify_credential(value: str) -> str:
     return BILLING_API
 
 
+def is_placeholder_credential(value: str) -> bool:
+    """True for the dummy value a client sends because its SDK insists on a key.
+
+    Many OpenAI-compatible clients refuse to start without one and ship with
+    `ollama`, `sk-local`, `lm-studio`, `not-needed`... A real key is long, so a
+    value shorter than `MIN_REAL_KEY_LENGTH`, or one of the well-known
+    placeholders, is not one. It is deliberately conservative the other way
+    too: a value that starts with a vendor's own key prefix, or any other value
+    of 20 characters or more, counts as a real key. When in doubt the call stays
+    `api`: "local, no cost" for a paid call is the believable false number.
+    Known limit: a short real key without a vendor prefix (a LiteLLM master
+    key set to `sk-1234`) is indistinguishable from a placeholder.
+    """
+    v = value.strip().lower()
+    if v.startswith(VENDOR_KEY_PREFIXES):
+        return False  # a vendor's own prefix is a real key, however short the sample
+    return len(v) < MIN_REAL_KEY_LENGTH or v in PLACEHOLDER_CREDENTIALS
+
+
 def classify_request(headers: dict, upstream_url: str, query: dict | None = None) -> Billing:
     """Classifies a proxy request. `headers` and `query` do not leave this function.
 
     The credential takes precedence over the destination: a gateway on localhost
     (LiteLLM, for example) forwards to a paid API with a key, and marking it
-    "local, no cost" would be a believable and false number. Only a request
-    **without** a credential to a local upstream counts as an own model (Ollama).
+    "local, no cost" would be a believable and false number.
+
+    Two cases count as an own model (Ollama, LM Studio, llama.cpp):
+
+    * a request to a local upstream **without** a credential;
+    * a request to a local upstream whose credential **does not look real**
+      (`is_placeholder_credential`): clients that insist on a key send a dummy
+      one, and it must not turn local usage into a paid API call. If any
+      credential in the request looks real, the request is classified by it as
+      usual, so a gateway holding a real key (or a LiteLLM virtual key) stays
+      `api`.
+
+    A dummy credential against a remote upstream is classified by its shape,
+    unchanged: only the destination being local makes it harmless.
     """
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    credentials: list[str] = []  # in order of precedence
     for name in ("x-api-key", "x-goog-api-key", "api-key"):
         if lowered.get(name):
-            return (classify_credential(lowered[name]), "")
+            credentials.append(lowered[name])
     auth = lowered.get("authorization", "")
     if auth.lower().startswith("bearer ") and auth[7:].strip():
-        return (classify_credential(auth[7:]), "")
-    if query and query.get("key"):  # Gemini accepts the key in the URL
+        credentials.append(auth[7:])
+    # Gemini accepts the key in the URL; its shape is not inspected there.
+    url_key = str(query["key"]) if query and query.get("key") else ""
+
+    is_local = (urlsplit(upstream_url).hostname or "") in LOCAL_HOSTS
+    offered = [*credentials, url_key] if url_key else credentials
+    if is_local and offered and all(
+            is_placeholder_credential(c) and classify_credential(c) != BILLING_SUBSCRIPTION
+            for c in offered):
+        return (BILLING_LOCAL, "")
+    if credentials:
+        return (classify_credential(credentials[0]), "")
+    if url_key:
         return (BILLING_API, "")
-    if (urlsplit(upstream_url).hostname or "") in LOCAL_HOSTS:
+    if is_local:
         return (BILLING_LOCAL, "")
     return UNKNOWN
 
