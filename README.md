@@ -499,9 +499,10 @@ Every call carries its billing type, detected automatically:
 | **Local** | Your own model, no cost | Local upstream **without** a credential (Ollama) |
 | **Billing?** | Could not be determined | — |
 
-The window separates **Paid via API** (real money) from **Subscription
-equivalent** (included in your plan, not paid separately), and puts a badge on
-each model. The credential is inspected and discarded: it is never stored.
+The window separates **API equivalent · billed via API** (what the calls billed
+per token would cost at published rates; it is calculated, not a recorded
+charge) from **Subscription equivalent** (included in your plan, not paid
+separately), and puts a badge on each model. The credential is inspected and discarded: it is never stored.
 
 Anything that cannot be detected is set by hand per provider in `config.json`:
 

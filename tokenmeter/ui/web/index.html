@@ -638,7 +638,7 @@ body.hide-cost .cost, body.hide-cost .m-cost, body.hide-cost .b-cost { display:n
         </div>
         <p class="note" id="costNote"></p>
         <div class="split" id="sp-n-split" hidden>
-          <div class="sp-row api" id="sp-n-api"><div><span class="sp-t">Paid via API</span><span class="sp-s" id="sp-n-apis"></span></div><span class="sp-v" id="sp-n-apiv">—</span></div>
+          <div class="sp-row api" id="sp-n-api"><div><span class="sp-t">API equivalent · billed via API</span><span class="sp-s" id="sp-n-apis"></span></div><span class="sp-v" id="sp-n-apiv">—</span></div>
           <div class="sp-row sub" id="sp-n-sub"><div><span class="sp-t">Subscription equivalent</span><span class="sp-s" id="sp-n-subs"></span></div><span class="sp-v" id="sp-n-subv">—</span></div>
           <div class="bill" id="sp-n-bill" hidden></div>
         </div>
@@ -717,7 +717,7 @@ body.hide-cost .cost, body.hide-cost .m-cost, body.hide-cost .b-cost { display:n
         </div>
         <p class="note" id="hCostNote"></p>
         <div class="split" id="sp-h-split" hidden>
-          <div class="sp-row api" id="sp-h-api"><div><span class="sp-t">Paid via API</span><span class="sp-s" id="sp-h-apis"></span></div><span class="sp-v" id="sp-h-apiv">—</span></div>
+          <div class="sp-row api" id="sp-h-api"><div><span class="sp-t">API equivalent · billed via API</span><span class="sp-s" id="sp-h-apis"></span></div><span class="sp-v" id="sp-h-apiv">—</span></div>
           <div class="sp-row sub" id="sp-h-sub"><div><span class="sp-t">Subscription equivalent</span><span class="sp-s" id="sp-h-subs"></span></div><span class="sp-v" id="sp-h-subv">—</span></div>
           <div class="bill" id="sp-h-bill" hidden></div>
         </div>
@@ -1239,7 +1239,7 @@ function renderCost(c, calls, ids, billing) {
   renderSplit(c, billing, ids.p);
 }
 
-/* breakdown: what was paid via API versus the subscription equivalent; all optional, null -> "—" */
+/* breakdown: the rate-based estimate for calls billed via API versus the subscription equivalent; neither is a recorded charge; all optional, null -> "—" */
 function renderSplit(c, billing, p) {
   const box = $(`#sp-${p}-split`);
   const api = c.api_spend && typeof c.api_spend === 'object' ? c.api_spend : null;
@@ -1255,7 +1255,7 @@ function renderSplit(c, billing, p) {
     apiRow.classList.toggle('on', on);
     const av = $(`#sp-${p}-apiv`);
     setText(av, money(api)); av.classList.toggle('na', !isNum(api.value));
-    setText($(`#sp-${p}-apis`), api.partial ? 'partial: some prices are missing or only a minimum, or billing types are unknown' : (on ? 'estimate for the API calls' : 'no calls identified as paid API'));
+    setText($(`#sp-${p}-apis`), api.partial ? 'calculated from published rates, not a recorded charge · partial: some prices are missing or only a minimum, or billing types are unknown' : (on ? 'calculated from published rates, not a recorded charge' : 'no calls identified as billed via API'));
   }
   const subRow = $(`#sp-${p}-sub`);
   subRow.hidden = !sub;

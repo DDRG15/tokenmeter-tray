@@ -125,3 +125,19 @@ def test_same_model_under_two_billing_types_renders_two_rows(web_page):
     assert sorted(badges) == ["API", "Subscription Max"]
     assert page.locator(rows).count() == 2
     assert errors == []
+
+
+def test_api_amount_is_labelled_as_an_estimate_not_a_payment(web_page):
+    page, app, errors = web_page
+    app.store.add_event(UsageEvent(ts=time.time() - 90, provider="anthropic", model="claude-opus-5",
+                                   input_tokens=2_000, output_tokens=0, source="proxy",
+                                   dedupe_key="label:api", billing="api"))
+    page.wait_for_function(
+        "document.querySelector('#sp-n-apis') && document.querySelector('#sp-n-apis').textContent.trim() !== ''",
+        timeout=15_000)
+    assert page.text_content("#sp-n-api .sp-t").strip() == "API equivalent · billed via API"
+    assert "not a recorded charge" in page.text_content("#sp-n-apis")
+    page.click("#tabSeg button[data-tab=history]")
+    assert page.text_content("#sp-h-api .sp-t").strip() == "API equivalent · billed via API"
+    assert "Paid via API" not in page.content()
+    assert errors == []

@@ -116,9 +116,10 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
     `day_rows` come from `Store.totals_by_model_day`: the cost of each model is
     priced day by day (see `priced_models`).
 
-    The total is still the API equivalent of everything. Below it, what **was**
-    paid via API is separated from what was done under a subscription, which is
-    included in the plan: only the former is money spent.
+    The total is still the API equivalent of everything. Below it, the calls
+    billed via API are separated from what was done under a subscription, which
+    is included in the plan. Both figures are estimates computed from published
+    per-token rates; TokenMeter records no charge, so neither is money paid.
     """
     rows = priced_models(day_rows)
     total_io = sum(r.io_tokens for r, _, _ in rows) or 1
@@ -178,7 +179,7 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
             "partial": t["partial"],
             "lower_bound": t["lower_bound"],
             "note": note,
-            # With no API calls, what was paid is a certain zero, not a "don't know".
+            # With no calls billed via API, the estimate is a certain zero, not a "don't know".
             "api_spend": api.as_dict() if api.any else dict(ZERO),
             "subscription_equivalent": sub.as_dict() if sub.any else dict(ZERO),
         }

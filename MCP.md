@@ -62,8 +62,10 @@ characters); any other value becomes `unrecognized`. Codex limit fields are
 returned only as finite numbers; anything else becomes `null`. A Codex window
 whose reset time has passed is marked `expired: true` and its `used_percent` is
 `null`, because it no longer describes current usage. When some calls have
-unknown billing, both the API spend and the subscription equivalent are partial,
-never a certain zero.
+unknown billing, both `api_spend` and `subscription_equivalent` are partial,
+never a certain zero. `api_spend` is the rate-based estimate for the calls billed
+via API; like every other amount here, it is calculated from published rates and
+is not a recorded charge.
 Read errors appear as source status, without echoing private exception contents.
 
 ## Standalone environment
