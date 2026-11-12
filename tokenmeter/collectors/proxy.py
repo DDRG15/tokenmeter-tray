@@ -386,15 +386,45 @@ class ProxyCollector(Collector):
             except Exception:
                 log.debug("could not create the sink", exc_info=True)
 
-        async for chunk in upstream_response.content.iter_any():
-            await out.write(chunk)  # the client first, always
-            if sink is not None:
-                sink.feed(chunk)
+        client_gone = False
+        try:
+            async for chunk in upstream_response.content.iter_any():
+                try:
+                    await out.write(chunk)  # the client first, always
+                except ConnectionError:
+                    # The client closed its side (cancelled response, timeout).
+                    # aiohttp raises ClientConnectionResetError, a ConnectionError.
+                    client_gone = True
+                if sink is not None:
+                    sink.feed(chunk)  # a chunk already read is usage the provider billed
+                if client_gone:
+                    break
 
-        await out.write_eof()
-
-        if sink is not None and measure and epoch == self._measurement_epoch and not self.paused:
-            self._record(sink, started, billing)
+            if not client_gone:
+                try:
+                    await out.write_eof()
+                except ConnectionError:
+                    client_gone = True
+        finally:
+            # Runs on every exit: normal end, client gone, upstream error and
+            # cancellation (CancelledError keeps propagating after this block).
+            # Usage the provider already billed must not depend on the client
+            # still being there to receive it.
+            if client_gone:
+                log.debug("client closed the connection before the response ended")
+            if not upstream_response.content.at_eof():
+                # The upstream body was not read to its end. Draining it would keep
+                # the provider generating for a reader that left, so the connection
+                # is closed (not returned to the pool) and the event is marked
+                # incomplete: whatever the sink saw is a lower bound.
+                try:
+                    upstream_response.close()
+                except Exception:
+                    log.debug("could not close the upstream response", exc_info=True)
+                if sink is not None:
+                    sink.mark_incomplete()
+            if sink is not None and measure and epoch == self._measurement_epoch and not self.paused:
+                self._record(sink, started, billing)
         return out
 
     def _record(self, sink, started: float, billing: tuple[str, str] = ("unknown", "")) -> None:

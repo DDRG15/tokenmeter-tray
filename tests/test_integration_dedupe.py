@@ -121,11 +121,13 @@ def test_same_call_through_proxy_and_transcript_counts_once(tmp_path, upstream):
         conn = http.client.HTTPConnection(proxy.host, proxy.port, timeout=15)
         conn.request("POST", "/anthropic/v1/messages", body=b'{"model":"claude-opus-5"}',
                      headers=REQUEST_HEADERS)
-        assert conn.getresponse().status == 200
+        resp = conn.getresponse()
+        assert resp.status == 200
+        resp.read()  # a client that hangs up before the body is a different scenario
         conn.close()
-        # The proxy records the event AFTER delivering the response (the client
-        # first). Stopping without waiting is a race that, under load, loses the
-        # event and fails the test without the product failing.
+        # The proxy records the event right after the last byte is written, in
+        # its own thread, so the event can land a moment after the client has the
+        # body. Stopping without waiting would race against that record.
         deadline = time.time() + 15  # with the suite under load, 5 s was not enough
         while store.totals_since(0).calls == 0 and time.time() < deadline:
             time.sleep(0.02)
