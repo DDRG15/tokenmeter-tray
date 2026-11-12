@@ -18,10 +18,15 @@ log = logging.getLogger(__name__)
 
 def model_line(row: dict, show_cost: bool) -> str:
     """One model of the breakdown. The billing type is part of the line because
-    the same model can appear twice, under a subscription and through an API key."""
+    the same model can appear twice, under a subscription and through an API key.
+    A local model has no API equivalent to show."""
     line = (f"{row['provider']} · {row['model']} ({billing_label(row['billing'], row['plan'])}): "
             f"{row['io']:,} tokens")
-    return line + (f" · {row['cost_text']} API equivalent" if show_cost else "")
+    if not show_cost:
+        return line
+    if row["billing"] == "local":
+        return line + " · local, no cost"
+    return line + f" · {row['cost_text']} API equivalent"
 
 
 class LinuxShell:

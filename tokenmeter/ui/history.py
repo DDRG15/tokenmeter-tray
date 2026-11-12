@@ -12,6 +12,7 @@ from tkinter import font as tkfont
 
 from ..dashboard import priced_models
 from ..history import RANGES_DAYS, bar_at, bar_layout, compact, daily_series, local_midnight, summarize
+from ..models import BILLING_LOCAL
 from ..pricing import format_cost
 from .icon import OK
 from .panel import BG, BG_ALT, BORDER, FG, FG_MUTED, _hex
@@ -188,8 +189,10 @@ class HistoryWindow:
         for i, (row, cost, floor) in enumerate(rows[:8]):
             text = f"{row.io_tokens:,} tok · {row.calls:,} calls"
             if self._app.config.show_cost:
-                equivalent = format_cost(cost, floor)
-                text += f" · API {equivalent}"
+                if row.billing == BILLING_LOCAL:
+                    text += " · local, no cost"
+                else:
+                    text += f" · API {format_cost(cost, floor)}"
             name = tk.Label(self._models, text=row.model, font=("Segoe UI", 9), bg=BG,
                             fg=FG, anchor="w")
             name.grid(row=i, column=0, sticky="w", pady=1)

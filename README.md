@@ -516,6 +516,10 @@ type after each model name. The same model used under a subscription and through
 an API key appears as two rows. The credential is inspected and discarded: it is
 never stored.
 
+Local usage costs nothing: it counts as an exact $0 in the money totals (they are
+not marked partial because of it), its models show `local` instead of a price, and
+it is never priced as if it had an API equivalent.
+
 Anything that cannot be detected is set by hand per provider in `config.json`:
 
 ```json

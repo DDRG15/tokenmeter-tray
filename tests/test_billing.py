@@ -232,6 +232,85 @@ def test_api_without_a_price_does_not_invent_money(tmp_path):
     assert spend["value"] is None and spend["text"] == "—"
 
 
+def local_call(app, io, key, model="llama3.2"):
+    app.store.add_event(UsageEvent(ts=time.time() - 60, provider="ollama", model=model,
+                                   input_tokens=io, output_tokens=0, source="proxy",
+                                   dedupe_key=key, billing="local"))
+
+
+def test_local_usage_is_an_exact_zero_and_never_partial(tmp_path):
+    """A local model has no price, but it also costs nothing: the total stays exact."""
+    app = app_without_tk(tmp_path)
+    with_billing(app, 200_000, "a", "api")
+    local_call(app, 5_000, "b")
+    state = dashboard.build_state(app)
+
+    assert state["cost"]["partial"] is False
+    assert state["cost"]["text"] == "$1.00"  # not "$1.00 (partial)"
+    assert state["cost"]["api_spend"]["value"] == pytest.approx(1.0)
+    assert state["cost"]["api_spend"]["partial"] is False
+    (local,) = [b for b in state["billing"] if b["kind"] == "local"]
+    assert local["cost"] == 0.0 and local["cost_text"] == "$0.00"
+    (row,) = [m for m in state["models"] if m["billing"] == "local"]
+    assert row["cost"] == 0.0 and row["cost_text"] == "local"
+
+
+def test_only_local_usage_totals_a_certain_zero(tmp_path):
+    app = app_without_tk(tmp_path)
+    local_call(app, 5_000, "a")
+    cost = dashboard.build_state(app)["cost"]
+    assert (cost["value"], cost["text"], cost["partial"]) == (0.0, "$0.00", False)
+    assert cost["api_spend"]["value"] == 0.0 and cost["api_spend"]["partial"] is False
+
+
+def test_a_local_model_is_not_priced_like_the_paid_model_it_is_named_after(tmp_path):
+    """A local copy served under a paid name has no API equivalent."""
+    app = app_without_tk(tmp_path)
+    local_call(app, 1_000_000, "a", model="claude-opus-5")
+    state = dashboard.build_state(app)
+    assert state["cost"]["value"] == 0.0
+    assert state["models"][0]["cost"] == 0.0
+
+
+def test_an_unpriced_paid_model_still_marks_the_total_partial_next_to_local_usage(tmp_path):
+    app = app_without_tk(tmp_path)
+    with_billing(app, 1_000, "a", "api", model="model-without-price")
+    local_call(app, 5_000, "b")
+    state = dashboard.build_state(app)
+    # The missing price is the paid model's, not the local one's.
+    assert state["cost"]["partial"] is True and state["cost"]["value"] is None
+    (local,) = [b for b in state["billing"] if b["kind"] == "local"]
+    assert local["cost"] == 0.0
+
+
+def test_history_and_mcp_share_the_same_local_rule(tmp_path):
+    """The history tab, the Tk window and the MCP summary price rows with the same functions."""
+    from tokenmeter import usage_query
+    from tokenmeter.models import BILLING_LOCAL
+
+    assert usage_query._models is dashboard._models  # noqa: SLF001
+    app = app_without_tk(tmp_path)
+    with_billing(app, 200_000, "a", "api")
+    local_call(app, 5_000, "b")
+    history = dashboard.build_history(app, 7)
+    assert history["cost"]["partial"] is False and history["cost"]["text"] == "$1.00"
+    # A local zero is exact: never a missing price and never a minimum.
+    (local_row,) = [r for r, c, floor in dashboard.priced_models(app.store.totals_by_model_day(0))
+                    if r.billing == BILLING_LOCAL and c == 0.0 and floor is False]
+    assert local_row.model == "llama3.2"
+
+
+def test_the_linux_model_line_says_local_instead_of_an_api_equivalent():
+    from tokenmeter.ui.linux import model_line
+
+    local = {"provider": "ollama", "model": "llama3.2", "io": 5_000, "billing": "local", "plan": "",
+             "cost_text": "local"}
+    paid = {"provider": "groq", "model": "m", "io": 10, "billing": "api", "plan": "", "cost_text": "$1.00"}
+    assert model_line(local, True) == "ollama · llama3.2 (Local): 5,000 tokens · local, no cost"
+    assert model_line(paid, True) == "groq · m (Paid API): 10 tokens · $1.00 API equivalent"
+    assert model_line(local, False) == "ollama · llama3.2 (Local): 5,000 tokens"
+
+
 # -- Codex limits -------------------------------------------------------------------------------
 
 

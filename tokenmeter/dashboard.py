@@ -17,7 +17,7 @@ from datetime import datetime
 
 from . import __version__
 from .billing import label as billing_label
-from .models import BILLING_API, BILLING_SUBSCRIPTION
+from .models import BILLING_API, BILLING_LOCAL, BILLING_SUBSCRIPTION
 from .history import RANGES_DAYS, daily_series, local_midnight, summarize
 from .pricing import cost_usd, format_cost, format_usd, is_lower_bound, VERIFIED_ON
 from .store import ModelTotals, Totals, merge_model_days
@@ -56,12 +56,20 @@ def priced_models(day_rows) -> list[tuple[ModelTotals, float | None, bool]]:
     applies to the days it was in force. Aggregated rows lose that: pricing a
     whole range at today's date charges every call at today's rate. A model with
     no price on any day has no cost (`None`), never an estimate.
+
+    A `local` row is an own model: it costs exactly zero and has no API
+    equivalent, so it is never looked up in the price table (a local model that
+    shares a name with a paid one must not inherit its price) and never leaves
+    the cost unknown.
     """
     days: dict[tuple[str, str, str, str], list] = {}
     for part in day_rows:
         days.setdefault((part.model, part.provider, part.billing, part.plan), []).append(part)
     priced = []
     for totals in merge_model_days(day_rows):
+        if totals.billing == BILLING_LOCAL:
+            priced.append((totals, 0.0, False))
+            continue
         cost: float | None = 0.0
         for part in days[(totals.model, totals.provider, totals.billing, totals.plan)]:
             day_cost = cost_usd(part.model, part.input_tokens, part.output_tokens,
@@ -143,7 +151,7 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
             "io": row.io_tokens,
             "calls": row.calls,
             "cost": c,
-            "cost_text": format_cost(c, floor),
+            "cost_text": "local" if row.billing == BILLING_LOCAL else format_cost(c, floor),
             "lower_bound": floor,
             "share": row.io_tokens / total_io,
         })
