@@ -505,8 +505,8 @@ Every call carries its billing type, detected automatically:
 |---|---|---|
 | **Subscription** (Pro, Max, Plus…) | Included in your quota | Claude Code or Codex login; OAuth token or JWT at the proxy |
 | **Paid API** | Every token is paid for | API key in the request (also when it goes through a local gateway) |
-| **Local** | Your own model, no cost | Local upstream **without** a credential, or with an obvious placeholder one (`ollama`, `sk-local`, `lm-studio`: anything under 20 characters or a well-known dummy value). A real-looking key keeps it **Paid API**, so a local gateway in front of a paid API is not shown as free |
-| **Billing?** | Could not be determined | — |
+| **Local** | Your own model, no cost | Local upstream **without** a credential or with only known placeholders (`ollama`, `sk-local`, `lm-studio`…), or an explicit local override for otherwise unknown billing |
+| **Billing?** | Could not be determined | A short credential to a local upstream that is neither a known placeholder nor a recognizable provider key; for example, `sk-1234` |
 
 The window separates **API equivalent · billed via API** (what the calls billed
 per token would cost at published rates; it is calculated, not a recorded
@@ -526,8 +526,19 @@ Anything that cannot be detected is set by hand per provider in `config.json`:
 "billing_overrides": {"groq": "api", "ollama": "local"}
 ```
 
-The override only fills in what is unknown; a certain detection is never
-overwritten.
+A short unrecognized credential does not prove that inference is free: a local
+gateway can forward paid requests with a short secret. A recognizable provider
+prefix or an unrecognized key of at least 20 characters remains **Paid API**;
+OAuth/JWT credentials keep their **Subscription** classification. Known placeholders
+are matched case-insensitively. Remote destinations keep their existing billing rules.
+
+For a local upstream named `ollama`, `"billing_overrides": {"ollama": "local"}`
+explicitly resolves an ambiguous key as local. The override only fills in what is
+unknown; a certain API or subscription detection is never overwritten. Unknown
+billing marks the API/subscription subtotals as partial, because those calls may
+belong to either side. The overall API equivalent stays exact when every model
+has a known tariff: it is what the work costs at published rates, whoever paid.
+An unknown model price is never treated as a free call.
 
 ## Codex
 

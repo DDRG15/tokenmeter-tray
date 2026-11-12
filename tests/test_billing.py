@@ -64,7 +64,7 @@ def test_a_local_gateway_with_a_key_is_api_not_local():
 
 
 DUMMY_KEYS = ["ollama", "sk-local", "lm-studio", "not-needed", "sk-no-key-required", "EMPTY",
-              "dummy", "token-abc123", "x"]
+              "dummy", "token-abc123"]
 
 
 @pytest.mark.parametrize("key", DUMMY_KEYS)
@@ -111,7 +111,7 @@ def test_a_subscription_credential_is_never_taken_for_a_placeholder():
                             "http://127.0.0.1:4000") == ("subscription", "")
 
 
-@pytest.mark.parametrize("key", DUMMY_KEYS)
+@pytest.mark.parametrize("key", [*DUMMY_KEYS, "x"])
 def test_a_dummy_key_to_a_remote_upstream_is_classified_as_before(key):
     """Only a local destination makes a placeholder harmless."""
     assert classify_request({"Authorization": f"Bearer {key}"}, "https://api.openai.com") == ("api", "")

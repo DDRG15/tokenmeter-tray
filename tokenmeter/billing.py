@@ -38,16 +38,14 @@ UNKNOWN: Billing = (BILLING_UNKNOWN, "")
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
 
-# Below this length a credential is a placeholder, not a key. The longest dummy
-# values in client documentation (`sk-no-key-required`) are 18 characters; real
-# provider and gateway keys are longer than 20.
+# Unrecognized credentials at least this long count as API evidence. Shorter
+# values are ambiguous unless they are known placeholders or have a vendor prefix.
 MIN_REAL_KEY_LENGTH = 20
 # Prefixes issued by the providers in `DEFAULT_UPSTREAMS` and their neighbours.
 # A value that starts with one is a key, not a placeholder.
 VENDOR_KEY_PREFIXES = ("sk-ant-", "sk-proj-", "sk-svcacct-", "sk-admin-", "sk-or-",
                        "gsk_", "aiza", "xai-")
-# Well-known dummy values, matched case-insensitively. The length rule already
-# covers the short ones; this set names them and also catches a longer variant.
+# Only these well-known dummy values count as placeholders (case-insensitive).
 PLACEHOLDER_CREDENTIALS = frozenset({
     "ollama", "lm-studio", "lmstudio", "local", "sk-local", "not-needed",
     "no-key", "no-key-required", "sk-no-key-required", "none", "null", "empty",
@@ -70,43 +68,25 @@ def classify_credential(value: str) -> str:
 
 
 def is_placeholder_credential(value: str) -> bool:
-    """True for the dummy value a client sends because its SDK insists on a key.
+    """True only for a known dummy credential, never merely because it is short.
 
-    Many OpenAI-compatible clients refuse to start without one and ship with
-    `ollama`, `sk-local`, `lm-studio`, `not-needed`... A real key is long, so a
-    value shorter than `MIN_REAL_KEY_LENGTH`, or one of the well-known
-    placeholders, is not one. It is deliberately conservative the other way
-    too: a value that starts with a vendor's own key prefix, or any other value
-    of 20 characters or more, counts as a real key. When in doubt the call stays
-    `api`: "local, no cost" for a paid call is the believable false number.
-    Known limit: a short real key without a vendor prefix (a LiteLLM master
-    key set to `sk-1234`) is indistinguishable from a placeholder.
+    A local gateway may forward paid requests using a short real secret.
+    Unrecognized short values therefore need unknown billing, while known
+    placeholders remain useful for clients whose SDK requires a key.
     """
-    v = value.strip().lower()
-    if v.startswith(VENDOR_KEY_PREFIXES):
-        return False  # a vendor's own prefix is a real key, however short the sample
-    return len(v) < MIN_REAL_KEY_LENGTH or v in PLACEHOLDER_CREDENTIALS
+    return value.strip().lower() in PLACEHOLDER_CREDENTIALS
 
 
 def classify_request(headers: dict, upstream_url: str, query: dict | None = None) -> Billing:
-    """Classifies a proxy request. `headers` and `query` do not leave this function.
+    """Classify credentials without storing them or guessing a gateway is free.
 
-    The credential takes precedence over the destination: a gateway on localhost
-    (LiteLLM, for example) forwards to a paid API with a key, and marking it
-    "local, no cost" would be a believable and false number.
+    Local destinations without credentials or with only known placeholders are
+    local. A provider prefix or an unrecognized credential of at least 20
+    characters is API evidence; subscription credentials keep their own type.
+    Other local credentials are ambiguous and stay unknown, so the existing
+    per-provider override can explicitly resolve them.
 
-    Two cases count as an own model (Ollama, LM Studio, llama.cpp):
-
-    * a request to a local upstream **without** a credential;
-    * a request to a local upstream whose credential **does not look real**
-      (`is_placeholder_credential`): clients that insist on a key send a dummy
-      one, and it must not turn local usage into a paid API call. If any
-      credential in the request looks real, the request is classified by it as
-      usual, so a gateway holding a real key (or a LiteLLM virtual key) stays
-      `api`.
-
-    A dummy credential against a remote upstream is classified by its shape,
-    unchanged: only the destination being local makes it harmless.
+    Credentials against remote destinations retain their existing classification.
     """
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
     credentials: list[str] = []  # in order of precedence
@@ -116,21 +96,28 @@ def classify_request(headers: dict, upstream_url: str, query: dict | None = None
     auth = lowered.get("authorization", "")
     if auth.lower().startswith("bearer ") and auth[7:].strip():
         credentials.append(auth[7:])
-    # Gemini accepts the key in the URL; its shape is not inspected there.
+    # Gemini also accepts the API key in the URL.
     url_key = str(query["key"]) if query and query.get("key") else ""
 
     is_local = (urlsplit(upstream_url).hostname or "") in LOCAL_HOSTS
     offered = [*credentials, url_key] if url_key else credentials
-    if is_local and offered and all(
-            is_placeholder_credential(c) and classify_credential(c) != BILLING_SUBSCRIPTION
-            for c in offered):
-        return (BILLING_LOCAL, "")
+    if is_local:
+        supplied = [value.strip() for value in offered if value.strip()]
+        for value in supplied:
+            kind = classify_credential(value)
+            if kind == BILLING_SUBSCRIPTION:
+                return (kind, "")
+            if not is_placeholder_credential(value) and (
+                    len(value) >= MIN_REAL_KEY_LENGTH or value.lower().startswith(VENDOR_KEY_PREFIXES)):
+                return (BILLING_API, "")
+        if all(is_placeholder_credential(value) for value in supplied):
+            return (BILLING_LOCAL, "")
+        return UNKNOWN
+
     if credentials:
         return (classify_credential(credentials[0]), "")
     if url_key:
         return (BILLING_API, "")
-    if is_local:
-        return (BILLING_LOCAL, "")
     return UNKNOWN
 
 
