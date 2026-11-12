@@ -112,7 +112,7 @@ def test_continuous_calls_open_a_new_window_at_the_exact_five_hour_boundary(lega
     call(runtime, NOW + 5 * HOUR, "exact-boundary", inp=200, out=0)
 
     snapshot = runtime.snapshot()
-    # current behavior: windows partition from their start, not from an idle gap.
+    # A window lasts 5 h from its first call, as on claude.ai; an idle gap does not end it.
     assert snapshot.start_ts == NOW + 5 * HOUR
     assert snapshot.end_ts == NOW + 10 * HOUR
     assert snapshot.remaining_seconds == 5 * HOUR
@@ -157,7 +157,8 @@ def test_a_late_call_can_move_the_last_window_into_the_past(legacy):
 
     call(runtime, NOW - 4 * HOUR, "late-earlier-start")
     snapshot = runtime.snapshot()
-    # current behavior: backfill repartitions history and can expire the active window.
+    # The late call is real: the session began 4 h earlier and has already ended,
+    # so nothing is active now. The history keeps both calls.
     assert not snapshot.has_activity
     assert snapshot.used_tokens == 0
     assert snapshot.start_ts == legacy.clock.now
@@ -184,7 +185,8 @@ def test_manual_reset_persists_the_floor_without_erasing_history_or_other_state(
     assert runtime.weekly_snapshot().used_tokens == 700
     assert runtime.store.totals_since(0).calls == 1
 
-    # current behavior: reset_now alone does not reset AlertTracker; shells do that separately.
+    # reset_now does not touch the alert memory: both shells call alerts.reset()
+    # themselves, and a new session start clears it anyway.
     runtime.shutdown()
     reopened = legacy.open()
     assert not reopened.snapshot().has_activity
@@ -237,20 +239,37 @@ def test_literal_resets_at_prefix_is_accepted(legacy):
     assert reset > legacy.clock.now
 
 
-def test_expired_web_anchor_can_reanchor_to_an_older_local_call(legacy):
+@pytest.mark.parametrize(
+    "next_call, expected_active, expected_start",
+    [
+        pytest.param(None, False, None, id="no-call-after-the-web-window"),
+        pytest.param(-HOUR, False, None, id="late-call-inside-the-expired-window"),
+        pytest.param(10 * 60, True, 10 * 60, id="first-call-after-the-web-window"),
+    ],
+)
+def test_an_expired_web_window_keeps_its_calls_and_the_next_session_starts_after_it(
+    legacy, next_call, expected_active, expected_start
+):
+    """claude.ai said the session runs [start, reset). Once it ends, its calls stay
+    in it: the next session starts with the first call after the reset, so the
+    meter does not keep showing the old session's usage."""
     runtime = legacy.open()
     call(runtime, NOW - 60, "inside-web-window")
     reset = parse_reset("Resets in 3 hr", NOW, runtime.config.window_seconds)
     start = runtime.session.set_reset_from_web(reset)
     assert runtime.snapshot().start_ts == start
 
-    legacy.clock.now = reset
+    legacy.clock.now = reset + 30 * 60
+    if next_call is not None:
+        call(runtime, reset + next_call, "after-or-late", inp=40, out=0)
     snapshot = runtime.snapshot()
-    # current behavior: expiry replays local events, including calls before the web reset.
-    assert snapshot.has_activity
-    assert snapshot.start_ts == NOW - 60
-    assert snapshot.end_ts == NOW - 60 + 5 * HOUR
-    assert snapshot.used_tokens == 150
+    assert snapshot.has_activity is expected_active
+    if expected_active:
+        assert snapshot.start_ts == reset + expected_start
+        assert snapshot.used_tokens == 40
+    else:
+        assert snapshot.start_ts == legacy.clock.now
+        assert snapshot.used_tokens == 0
     assert runtime.store.get_state("session_web_start_ts") == repr(start)
 
 
@@ -269,7 +288,7 @@ def test_multipoint_calibration_reopens_with_the_fit_not_the_last_row_budget(leg
     assert config["calibrated_at"] == NOW + 60
 
     rows = list(reversed(runtime.store.calibrations()))
-    # current behavior: calibration rows store single-point budgets, Config stores the fit.
+    # Each calibration row records its own single-point budget; Config holds the fit.
     assert [(row["counted_tokens"], row["budget_tokens"]) for row in rows] == [
         (50_000, 250_000), (100_000, 333_333)
     ]
@@ -423,7 +442,7 @@ def test_weekly_calibration_persists_only_weekly_config_and_not_session_history(
     snapshot = reopened.weekly_snapshot()
     assert snapshot.used_tokens == 5350
     assert snapshot.configured is anchored
-    # current behavior: calibration alone does not configure a weekly reset.
+    # The percentage needs a weekly reset; both shells set it before calibrating.
     assert snapshot.percent == (25 if anchored else 0)
 
 
@@ -437,7 +456,7 @@ def test_future_clock_tolerance_also_affects_legacy_budget_totals(
     call(runtime, NOW - 60, "past", inp=100, out=0)
     call(runtime, NOW + future_seconds, "future", inp=200, out=0)
     snapshot = runtime.snapshot() if tracker == "session" else runtime.weekly_snapshot()
-    # current behavior: totals use the store's wall-clock tolerance, not snapshot.now_ts.
+    # Totals accept records up to 60 s ahead of the clock (store.CLOCK_TOLERANCE_S), on purpose.
     assert snapshot.now_ts == NOW
     assert snapshot.used_tokens == expected_used
 
