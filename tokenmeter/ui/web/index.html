@@ -1255,7 +1255,7 @@ function renderSplit(c, billing, p) {
     apiRow.classList.toggle('on', on);
     const av = $(`#sp-${p}-apiv`);
     setText(av, money(api)); av.classList.toggle('na', !isNum(api.value));
-    setText($(`#sp-${p}-apis`), api.partial ? 'partial: some prices or billing types are unknown' : (on ? 'estimate for the API calls' : 'no calls identified as paid API'));
+    setText($(`#sp-${p}-apis`), api.partial ? 'partial: some prices are missing or only a minimum, or billing types are unknown' : (on ? 'estimate for the API calls' : 'no calls identified as paid API'));
   }
   const subRow = $(`#sp-${p}-sub`);
   subRow.hidden = !sub;

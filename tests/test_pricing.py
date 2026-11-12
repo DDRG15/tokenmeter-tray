@@ -1,7 +1,8 @@
 import pytest
 
 from tokenmeter import pricing
-from tokenmeter.pricing import PRICES, Price, cost_usd, format_usd, normalize
+from tokenmeter.pricing import (PRICES, Price, cost_usd, format_cost, format_usd,
+                                is_lower_bound, normalize)
 
 
 def test_normalize_strips_platform_prefixes_and_date_suffixes():
@@ -158,3 +159,33 @@ def test_platform_aliases_resolve_to_the_exact_version():
 def test_verified_date_is_iso_and_not_in_the_future():
     from datetime import date
     assert date.fromisoformat(pricing.VERIFIED_ON) <= date.today()
+
+
+def test_only_tiered_models_are_lower_bounds():
+    """Haiku 5.5 bills above 100K prompt tokens at a higher rate, per request."""
+    assert PRICES["claude-haiku-5-5"].lower_bound is True
+    assert is_lower_bound("claude-haiku-5-5")
+    assert is_lower_bound("anthropic.claude-haiku-5-5-20261001-v1:0")
+    assert not is_lower_bound("claude-haiku-4-5")
+    assert not is_lower_bound("claude-opus-5-5")
+    assert [m for m, price in PRICES.items() if price.lower_bound and m.startswith("claude-")] == [
+        "claude-haiku-5-5"]
+
+
+def test_a_model_without_a_price_is_not_a_lower_bound():
+    assert is_lower_bound("made-up-model") is False
+    assert is_lower_bound("") is False
+
+
+def test_lower_bound_does_not_change_the_base_tier_amount():
+    """The flag labels the figure; the figure is still the base tier."""
+    assert cost_usd("claude-haiku-5-5", 1_000_000, 1_000_000,
+                    on_date="2026-11-12") == pytest.approx(0.60)
+
+
+def test_format_cost_marks_a_minimum_and_leaves_exact_values_alone():
+    assert format_cost(0.11, lower_bound=True) == "≥ $0.11"
+    assert format_cost(0.0031, lower_bound=True) == "≥ $0.0031"
+    assert format_cost(0.11) == format_usd(0.11) == "$0.11"
+    assert format_cost(None, lower_bound=True) == "—"
+    assert format_cost(None) == "—"

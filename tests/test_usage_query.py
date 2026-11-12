@@ -398,3 +398,31 @@ def test_codex_limits_survive_a_rollout_older_than_the_window(tmp_path):
     assert limits is not None and limits["plan_type"] == "plus"
     assert limits["primary"]["expired"] is True and limits["primary"]["used_percent"] is None
     assert limits["secondary"]["expired"] is False and limits["secondary"]["used_percent"] == 40
+
+
+def test_summary_marks_a_tiered_price_as_a_lower_bound(tmp_path):
+    """A client reading `cost_text` or `value` must not take a minimum for an exact cost."""
+    now = time.time()
+    stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    claude = tmp_path / "claude"
+    claude.mkdir()
+    lines = []
+    for model, request in (("claude-haiku-5-5", "req_haiku"), ("claude-opus-5", "req_opus")):
+        lines.append(json.dumps({
+            "timestamp": stamp, "type": "assistant", "requestId": request,
+            "message": {"id": f"msg_{request}", "model": model, "content": [],
+                        "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}}))
+    (claude / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+    summary = UsageQuery(claude, None).summary(now=now)
+    models = {row["model"]: row for row in summary["models"]}
+    assert models["claude-haiku-5-5"]["lower_bound"] is True
+    assert models["claude-haiku-5-5"]["cost_text"] == "≥ $0.10"
+    assert models["claude-opus-5"]["lower_bound"] is False
+    assert models["claude-opus-5"]["cost_text"] == "$5.00"
+    total = summary["api_equivalent"]
+    assert total["lower_bound"] is True and total["partial"] is True
+    assert total["text"].endswith("(partial)")
+    assert total["value"] == pytest.approx(5.10)
+    assert all(group["lower_bound"] for group in summary["billing"])
+    json.dumps(summary)

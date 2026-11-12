@@ -46,6 +46,11 @@ class Price:
     intro_output_per_mtok: float | None = None
     intro_until: str | None = None
     cache_read_multiplier: float = CACHE_READ_MULTIPLIER
+    # True when the model is billed in tiers decided per request (a higher rate
+    # above a prompt-length threshold). `cost_usd` receives totals aggregated
+    # over many requests and cannot tell which ones crossed the threshold, so
+    # the table carries the base tier and the figure is a minimum, never exact.
+    lower_bound: bool = False
 
     def rates(self, on_date: str) -> tuple[float, float]:
         if self.intro_until and on_date <= self.intro_until:
@@ -67,7 +72,8 @@ class Price:
 # totals aggregated over many requests and cannot tell which requests crossed
 # the threshold, so the table carries the base tier. A request with a prompt
 # over 100,000 tokens (input + cache reads + cache writes) costs up to 5x more
-# than reported here: the Haiku 5.5 figure is a lower bound, not an exact cost.
+# than reported here: the Haiku 5.5 figure is a lower bound, not an exact cost,
+# and its `Price` carries `lower_bound=True` so every surface shows it as one.
 PRICES: dict[str, Price] = {
     "claude-fable-5-2": Price(
         8.00, 40.00, cache_read_multiplier=CACHE_READ_MULTIPLIER_FABLE_5_1_PLUS),
@@ -93,7 +99,7 @@ PRICES: dict[str, Price] = {
     "claude-sonnet-5": Price(2.00, 10.00),
     "claude-sonnet-4-6": Price(3.00, 15.00),
     "claude-sonnet-4-5": Price(3.00, 15.00),
-    "claude-haiku-5-5": Price(0.10, 0.50),
+    "claude-haiku-5-5": Price(0.10, 0.50, lower_bound=True),
     "claude-haiku-4-5": Price(1.00, 5.00),
 }
 
@@ -129,6 +135,15 @@ def normalize(model: str) -> str:
     return name
 
 
+def is_lower_bound(model: str) -> bool:
+    """True when the model's aggregated cost can only be a minimum.
+
+    Unknown models are not lower bounds: they have no cost at all.
+    """
+    price = PRICES.get(normalize(model))
+    return price is not None and price.lower_bound
+
+
 def cost_usd(
     model: str,
     input_tokens: int,
@@ -142,6 +157,9 @@ def cost_usd(
 
     `cache_write_1h_tokens` is the subset of `cache_write_tokens` written with a
     1-hour TTL; the rest is priced at 5 minutes.
+
+    For a model whose `Price.lower_bound` is set (see `is_lower_bound`) the
+    result is a minimum: requests in a higher tier cost more than this.
 
     This is **not what a subscription user pays**. It is what the same work
     would have cost calling the API at these public rates.
@@ -178,3 +196,9 @@ def format_usd(value: float | None) -> str:
     if value < 0.01:
         return f"${value:.4f}"
     return f"${value:,.2f}"
+
+
+def format_cost(value: float | None, lower_bound: bool = False) -> str:
+    """`format_usd`, prefixed with "≥ " when the amount is only a minimum."""
+    text = format_usd(value)
+    return f"≥ {text}" if lower_bound and value is not None else text

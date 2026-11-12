@@ -559,6 +559,10 @@ change when you look at the same days later, after the promotion has ended.
   2026-11-12). If they change, the number drifts until the table is updated.
 - **A model without a rate shows `—`** and the total is marked as partial. It is
   never estimated with another model's price.
+- **A model billed in per-request tiers shows a minimum.** Claude Haiku 5.5 costs
+  more above 100,000 prompt tokens, decided per request. Totals do not say which
+  requests crossed the threshold, so its row reads `≥ $…` and every total that
+  includes it is marked as partial.
 - **Consumption served by a subscription does not have to map 1:1** to API rates
   even when the tokens are the same.
 

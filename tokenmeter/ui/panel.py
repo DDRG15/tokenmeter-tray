@@ -306,10 +306,9 @@ class Panel:
         if cfg.show_cost:
             self._cost_box.pack(fill="x", before=self._models_header)
             v["cost"].set(state["cost"]["text"] if totals["calls"] else "—")
-            note = "what this work would cost at API rates; a subscription does not pay this" if totals["calls"] else ""
-            if state["cost"]["partial"]:
-                note += " · some model has no price"
-            v["cost_note"].set(note)
+            # The note is composed in `dashboard._models`, so both interfaces say
+            # the same thing about missing prices and lower bounds.
+            v["cost_note"].set(state["cost"]["note"] if totals["calls"] else "")
         else:
             self._cost_box.pack_forget()
             v["cost"].set("")

@@ -222,7 +222,7 @@ def test_without_api_what_was_paid_is_a_certain_zero(tmp_path):
     app = app_without_tk(tmp_path)
     with_billing(app, 1_000, "a", "subscription", "pro")
     assert dashboard.build_state(app)["cost"]["api_spend"] == {
-        "value": 0.0, "text": "$0.00", "partial": False}
+        "value": 0.0, "text": "$0.00", "partial": False, "lower_bound": False}
 
 
 def test_api_without_a_price_does_not_invent_money(tmp_path):

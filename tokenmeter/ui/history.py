@@ -12,7 +12,7 @@ from tkinter import font as tkfont
 
 from ..dashboard import priced_models
 from ..history import RANGES_DAYS, bar_at, bar_layout, compact, daily_series, local_midnight, summarize
-from ..pricing import format_usd
+from ..pricing import format_cost
 from .icon import OK
 from .panel import BG, BG_ALT, BORDER, FG, FG_MUTED, _hex
 
@@ -185,10 +185,10 @@ class HistoryWindow:
             w.grid(row=0, column=0, sticky="w")
             self._model_rows.append(w)
             return
-        for i, (row, cost) in enumerate(rows[:8]):
+        for i, (row, cost, floor) in enumerate(rows[:8]):
             text = f"{row.io_tokens:,} tok · {row.calls:,} calls"
             if self._app.config.show_cost:
-                equivalent = "—" if cost is None else format_usd(cost)
+                equivalent = format_cost(cost, floor)
                 text += f" · API {equivalent}"
             name = tk.Label(self._models, text=row.model, font=("Segoe UI", 9), bg=BG,
                             fg=FG, anchor="w")

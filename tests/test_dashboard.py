@@ -81,6 +81,79 @@ def test_percent_level_and_models(tmp_path):
     assert state["cost"]["text"].endswith("(partial)")
 
 
+def test_a_tiered_model_is_shown_as_a_minimum_and_makes_the_total_partial(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "haiku", model="claude-haiku-5-5")
+    call(app, 1_000_000, "opus", model="claude-opus-5")
+    state = dashboard.build_state(app)
+
+    haiku = next(m for m in state["models"] if m["model"] == "claude-haiku-5-5")
+    opus = next(m for m in state["models"] if m["model"] == "claude-opus-5")
+    assert haiku["lower_bound"] is True
+    assert haiku["cost"] == pytest.approx(0.10)
+    assert haiku["cost_text"] == "≥ $0.10"
+    # An exact model next to it stays exact.
+    assert opus["lower_bound"] is False and opus["cost_text"] == "$5.00"
+
+    cost = state["cost"]
+    assert cost["value"] == pytest.approx(5.10)
+    assert cost["partial"] is True and cost["lower_bound"] is True
+    assert cost["text"] == "$5.10 (partial)"
+    assert "lower bound" in cost["note"] and "no price" not in cost["note"]
+    json.dumps(state)
+
+
+def test_only_exact_prices_leave_the_total_exact(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "opus", model="claude-opus-5")
+    state = dashboard.build_state(app)
+    assert state["cost"]["partial"] is False and state["cost"]["lower_bound"] is False
+    assert state["cost"]["text"] == "$5.00"
+    assert state["models"][0]["lower_bound"] is False
+
+
+def test_a_lower_bound_and_a_missing_price_are_reported_separately(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "haiku", model="claude-haiku-5-5")
+    call(app, 1_000, "none", model="model-without-price")
+    state = dashboard.build_state(app)
+    unpriced = next(m for m in state["models"] if m["model"] == "model-without-price")
+    assert unpriced["lower_bound"] is False and unpriced["cost_text"] == "—"
+    assert state["cost"]["partial"] is True and state["cost"]["lower_bound"] is True
+    assert "no price" in state["cost"]["note"] and "lower bound" in state["cost"]["note"]
+
+
+def test_a_missing_price_alone_is_not_a_lower_bound(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000, "none", model="model-without-price")
+    cost = dashboard.build_state(app)["cost"]
+    assert cost["partial"] is True and cost["lower_bound"] is False
+    assert "lower bound" not in cost["note"]
+
+
+def test_the_lower_bound_reaches_the_billing_groups_and_the_history(tmp_path):
+    app = app_without_tk(tmp_path)
+    call(app, 1_000_000, "haiku", model="claude-haiku-5-5")
+    state = dashboard.build_state(app)
+    (group,) = state["billing"]
+    assert group["lower_bound"] is True and group["cost_text"].endswith("(partial)")
+    hist = dashboard.build_history(app, 7)
+    assert hist["models"][0]["lower_bound"] is True
+    assert hist["models"][0]["cost_text"].startswith("≥ ")
+    assert hist["cost"]["lower_bound"] is True and hist["cost"]["partial"] is True
+
+
+def test_the_lower_bound_marks_the_api_and_subscription_split(tmp_path):
+    app = app_without_tk(tmp_path)
+    app.store.add_event(UsageEvent(
+        ts=time.time() - 60, provider="anthropic", model="claude-haiku-5-5",
+        input_tokens=1_000_000, output_tokens=0, source="transcript", dedupe_key="a",
+        billing="api"))
+    cost = dashboard.build_state(app)["cost"]
+    assert cost["api_spend"]["lower_bound"] is True and cost["api_spend"]["partial"] is True
+    assert cost["subscription_equivalent"]["lower_bound"] is False
+
+
 def test_undated_records_are_visible_in_the_status_text_and_the_health_list(tmp_path):
     from types import SimpleNamespace
     app = app_without_tk(tmp_path)
