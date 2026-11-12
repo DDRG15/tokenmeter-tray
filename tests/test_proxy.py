@@ -178,13 +178,49 @@ def proxy(tmp_path, upstream):
         # extractor map: it covers upstreams the user names by hand.
         {"anthropic": f"http://{host}:{port}", "odd": f"http://{host}:{port}"},
     )
+    track_handled(collector)
     collector.start()
     assert collector.wait_ready(10.0), f"the proxy did not start: {collector.bind_error}"
     yield collector, store
     collector.stop()
 
 
+def track_handled(collector) -> None:
+    """Counts the requests whose handling finished, usage recording included.
+
+    The proxy writes the whole response before it records the usage, so the
+    client is never kept waiting for the store. A test that reads the store or
+    the stats as soon as the body arrives can therefore run before the
+    recording. `wait_until_handled` closes that gap. It can be installed on a
+    running proxy too, as long as no request is in flight.
+    """
+    collector.handled = collector.stats.requests - collector.stats.errors
+    pump = collector._pump
+
+    async def counted(*args, **kwargs):
+        try:
+            return await pump(*args, **kwargs)
+        finally:
+            collector.handled += 1
+
+    collector._pump = counted
+
+
+def wait_until_handled(collector, timeout: float = 15.0) -> None:
+    """Returns once every request the proxy accepted has been fully handled.
+
+    A request either reaches `_pump` (counted by `track_handled`) or fails to
+    reach the upstream, which counts an error before the 502 is sent.
+    """
+    deadline = time.time() + timeout
+    while collector.handled + collector.stats.errors < collector.stats.requests:
+        assert time.time() < deadline, "the proxy did not finish handling the request"
+        time.sleep(0.005)
+
+
 def post(collector, path, payload=None, headers=None):
+    if not hasattr(collector, "handled"):
+        track_handled(collector)
     conn = http.client.HTTPConnection(collector.host, collector.port, timeout=15)
     body = json.dumps(payload or {}).encode()
     conn.request("POST", path, body=body,
@@ -192,7 +228,26 @@ def post(collector, path, payload=None, headers=None):
     resp = conn.getresponse()
     data = resp.read()
     conn.close()
+    wait_until_handled(collector)
     return resp, data
+
+
+# -- test harness -------------------------------------------------------------
+
+
+def test_post_returns_only_after_the_call_is_recorded(proxy):
+    """The proxy answers first and records afterwards. A slow store must not let a
+    test read the totals before the call is in them."""
+    collector, store = proxy
+    record = collector._record
+
+    def slow_record(*args, **kwargs):
+        time.sleep(0.3)
+        return record(*args, **kwargs)
+
+    collector._record = slow_record
+    post(collector, "/anthropic/v1/messages", {"model": "claude-opus-5"})
+    assert store.totals_since(0).calls == 1
 
 
 # -- forwarding ---------------------------------------------------------------

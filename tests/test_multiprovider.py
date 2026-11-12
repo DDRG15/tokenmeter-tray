@@ -15,7 +15,7 @@ import pytest
 
 from tokenmeter.collectors.proxy import ProxyCollector
 from tokenmeter.store import Store
-from tests.test_proxy import free_port
+from tests.test_proxy import free_port, track_handled, wait_until_handled
 
 RESPONSES = {
     # Gemini, native API: promptTokenCount includes the cached tokens.
@@ -94,6 +94,7 @@ def env(tmp_path):
             "deepseek": base,
         },
     )
+    track_handled(proxy)
     proxy.start()
     assert proxy.wait_ready(10.0), proxy.bind_error
     yield proxy, store
@@ -108,6 +109,7 @@ def call_path(proxy, path):
     resp = con.getresponse()
     resp.read()
     con.close()
+    wait_until_handled(proxy)
     return resp.status
 
 
