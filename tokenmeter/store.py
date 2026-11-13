@@ -394,6 +394,22 @@ class Store:
             ).fetchone()
         return Totals(**{k: int(row[k]) for k in row.keys()})
 
+    def totals_between(self, start_ts: float, end_ts: float, scope: str | None = None,
+                       as_of: float | None = None) -> Totals:
+        """Totals of the half-open interval [start, end).
+
+        A call stamped exactly at `end_ts` belongs to whatever starts there, so
+        two consecutive intervals never share a call. `as_of` is the instant of
+        the reading: a call stamped after it has not happened yet.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {self._AGG_COLS} FROM usage_events "
+                f"WHERE ts >= ? AND ts < ? AND ts <= ? AND {scope_sql(scope)}",
+                (start_ts, end_ts, _upper_bound(as_of)),
+            ).fetchone()
+        return Totals(**{k: int(row[k]) for k in row.keys()})
+
     def totals_by_model(self, since_ts: float, provider: str = "", source: str = "",
                         until_ts: float | None = None) -> list[ModelTotals]:
         until = _upper_bound(until_ts)
