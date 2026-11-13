@@ -507,7 +507,7 @@ Every call carries its billing type, detected automatically:
 |---|---|---|
 | **Subscription** (Pro, Max, Plus…) | Included in your quota | Claude Code or Codex login; OAuth token or JWT at the proxy |
 | **Paid API** | Every token is paid for | API key in the request (also when it goes through a local gateway) |
-| **Local** | Your own model, no cost | Local upstream **without** a credential or with only known placeholders (`ollama`, `sk-local`, `lm-studio`…), or an explicit local override for otherwise unknown billing |
+| **Local** | Your own model, no cost | Local upstream **without** a credential or with only known placeholders (`ollama`, `sk-local`, `lm-studio`…), a Codex session on its built-in local providers (`codex --oss` with Ollama or LM Studio), or an explicit local override for otherwise unknown billing |
 | **Billing?** | Could not be determined | A short credential to a local upstream that is neither a known placeholder nor a recognizable provider key; for example, `sk-1234` |
 
 The window separates **API equivalent · billed via API** (what the calls billed
