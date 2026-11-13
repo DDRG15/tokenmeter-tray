@@ -740,6 +740,34 @@ class Store:
                 "FROM usage_events WHERE ts>=? AND ts<=? AND (?='' OR provider=?) "
                 "AND (?='' OR source=?) ORDER BY ts,id", (since, until, provider, provider, source, source))]
 
+    def recent_events(self, limit: int, before: tuple[float, int] | None = None,
+                      provider: str = "", source: str = "") -> list[dict]:
+        """The latest calls, newest first, one page at a time.
+
+        `before` is the (ts, id) of the last row already shown: the next page
+        starts strictly after it in that order. Paging by position instead
+        would skip or repeat rows whenever a new call arrives in between.
+        Normalized data only; there are no bodies or credentials to return.
+        """
+        ts, row_id = before if before is not None else (float("inf"), 0)
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT id,ts,provider,model,input_tokens,output_tokens,cache_write_tokens,"
+                "cache_read_tokens,cache_write_1h_tokens,source,usage_complete,billing,plan "
+                "FROM usage_events WHERE ts <= ? AND (ts < ? OR (ts = ? AND id < ?)) "
+                "AND (?='' OR provider=?) AND (?='' OR source=?) "
+                "ORDER BY ts DESC, id DESC LIMIT ?",
+                (_upper_bound(None), ts, ts, row_id, provider, provider, source, source,
+                 max(0, int(limit))))]
+
+    def events_newer_than(self, ts: float, row_id: int, provider: str = "", source: str = "") -> int:
+        """How many calls sort after (ts, id): the ones a loaded list does not show yet."""
+        with self._lock:
+            return int(self._conn.execute(
+                "SELECT COUNT(*) FROM usage_events WHERE ts <= ? AND (ts > ? OR (ts = ? AND id > ?)) "
+                "AND (?='' OR provider=?) AND (?='' OR source=?)",
+                (_upper_bound(None), ts, ts, row_id, provider, provider, source, source)).fetchone()[0])
+
     def backup_to(self, path: Path) -> None:
         """Consistent SQLite snapshot, even with WAL or active collectors."""
         from contextlib import closing

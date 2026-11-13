@@ -20,7 +20,9 @@ from .billing import label as billing_label
 from .models import BILLING_API, BILLING_LOCAL, BILLING_SUBSCRIPTION
 from .history import RANGES_DAYS, daily_series, local_midnight, summarize
 from .session import SOURCE_CLAUDE_AI, SOURCE_CLAUDE_CODE, SOURCE_ESTIMATED, SOURCE_NONE
-from .pricing import cost_usd, format_cost, format_usd, is_lower_bound, VERIFIED_ON
+from .pricing import (
+    cost_pico, cost_usd, format_cost, format_pico, format_usd, is_lower_bound, VERIFIED_ON,
+)
 from .store import ModelTotals, Totals, merge_model_days
 
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -307,6 +309,45 @@ def build_budgets(app, now: float | None = None) -> dict:
     """Every personal budget with its current period, as plain data."""
     statuses, invalid = app.budget_statuses(now)
     return {"budgets": [status.as_dict() for status in statuses], "invalid": invalid}
+
+
+CALLS_PAGE = 50
+
+
+def build_calls(app, before: tuple[float, int] | None = None, limit: int = CALLS_PAGE,
+                provider: str = "", source: str = "") -> dict:
+    """One page of the latest calls, newest first, as plain data for a table.
+
+    `next` is what to pass as `before` for the following page, or None when
+    this page reached the oldest call. Each call is priced on its own day, in
+    exact picodollars; a call without a price shows a dash, never a zero.
+    """
+    # One row more than asked tells whether another page exists.
+    rows = app.store.recent_events(limit + 1, before, provider, source)
+    more = len(rows) > limit
+    calls = []
+    for row in rows[:limit]:
+        when = datetime.fromtimestamp(row["ts"])
+        if row["billing"] == BILLING_LOCAL:
+            cost, cost_text = 0, "local"
+        else:
+            cost = cost_pico(row["model"], row["input_tokens"], row["output_tokens"],
+                             row["cache_write_tokens"], row["cache_read_tokens"],
+                             row["cache_write_1h_tokens"], on_date=when.date().isoformat())
+            cost_text = format_pico(cost, cost is not None and is_lower_bound(row["model"]))
+        calls.append({
+            "id": row["id"], "ts": row["ts"],
+            "when": f"{DAYS[when.weekday()]} {when.strftime('%d/%m %H:%M:%S')}",
+            "provider": row["provider"], "model": row["model"], "source": row["source"],
+            "billing": billing_label(row["billing"], row["plan"]),
+            "input": row["input_tokens"], "output": row["output_tokens"],
+            "cache_read": row["cache_read_tokens"], "cache_write": row["cache_write_tokens"],
+            # A call cut before its usage arrived recorded fewer tokens than it used.
+            "complete": bool(row["usage_complete"]),
+            "cost": None if cost is None else str(cost), "cost_text": cost_text,
+        })
+    last = calls[-1] if calls else None
+    return {"calls": calls, "next": [last["ts"], last["id"]] if more and last else None}
 
 
 SESSION_HISTORY_LIMIT = 40

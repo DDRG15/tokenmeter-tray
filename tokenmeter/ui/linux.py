@@ -11,7 +11,7 @@ from pathlib import Path
 from .. import budgets as budget_rules
 from ..billing import label as billing_label
 from ..config import data_dir
-from ..dashboard import build_budgets, build_sessions, build_state, build_history
+from ..dashboard import build_budgets, build_calls, build_sessions, build_state, build_history
 from ..runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -67,6 +67,25 @@ def session_row(row: dict) -> tuple[str, str, str, str, str]:
     return when, f"{row['used']:,}", calls, f"{row['percent']:.0f}%", row["source_text"]
 
 
+def call_row(call: dict, show_cost: bool) -> tuple[str, str, str, str, str, str, str]:
+    """(when, model, billing, input, output, cache, API equivalent) of one call.
+
+    A call cut before its usage arrived is marked next to its tokens: the
+    figures on that row are less than what the call used.
+    """
+    cut = "" if call["complete"] else " (cut)"
+    cache = f"{call['cache_read']:,} read · {call['cache_write']:,} written"
+    return (call["when"], f"{call['provider']} · {call['model']}", call["billing"],
+            f"{call['input']:,}{cut}", f"{call['output']:,}{cut}", cache,
+            call["cost_text"] if show_cost else "")
+
+
+def new_calls_text(count: int) -> str:
+    if count <= 0:
+        return ""
+    return ("1 new call" if count == 1 else f"{count:,} new calls") + " since this list was loaded"
+
+
 class LinuxShell:
     """One GTK main loop; the indicator and widgets belong to its main thread."""
     def __init__(self, runtime, *, notifier=None):
@@ -89,6 +108,9 @@ class LinuxShell:
         self.history_data = None
         self.budget_data = {"budgets": [], "invalid": 0}
         self.session_rows = []
+        self.call_rows = []
+        self._calls_next = None
+        self._calls_key = None
         self._side_refreshed_at = None
 
     def build(self):
@@ -209,6 +231,27 @@ class LinuxShell:
             "start with your first call here; usage elsewhere can make the real one earlier.")
         sessions_page.pack_start(session_note, False, False, 0)
         self.tabs.append_page(sessions_page, Gtk.Label(label="Sessions"))
+        calls_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        calls_page.set_border_width(12)
+        self.call_store = Gtk.ListStore(str, str, str, str, str, str, str)
+        call_tree = Gtk.TreeView(model=self.call_store)
+        for column, title in enumerate(("When", "Model", "Billing", "Input", "Output", "Cache",
+                                        "API equivalent")):
+            cell = Gtk.CellRendererText()
+            call_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
+        call_scroll = Gtk.ScrolledWindow()
+        call_scroll.set_min_content_height(220)
+        call_scroll.add(call_tree)
+        calls_page.pack_start(call_scroll, True, True, 0)
+        self.calls_note = self._label()
+        calls_page.pack_start(self.calls_note, False, False, 0)
+        call_buttons = Gtk.Box(spacing=8)
+        self.calls_refresh_button = self._button("Show the latest", self._reload_calls)
+        self.calls_more_button = self._button("Load older calls", self._more_calls)
+        call_buttons.pack_start(self.calls_refresh_button, True, True, 0)
+        call_buttons.pack_start(self.calls_more_button, True, True, 0)
+        calls_page.pack_start(call_buttons, False, False, 0)
+        self.tabs.append_page(calls_page, Gtk.Label(label="Calls"))
         settings = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         settings.set_border_width(12)
         for attribute, title, action in (
@@ -283,6 +326,7 @@ class LinuxShell:
 
     def _filters_changed(self, *_):
         if self.indicator is not None and not self._updating_filters and not self._action_running and not self._closed:
+            self._side_refreshed_at = None  # the lists below follow the filters at once
             self.refresh()
 
     def _populate_filters(self):
@@ -398,6 +442,57 @@ class LinuxShell:
         self.session_store.clear()
         for row in self.session_rows:
             self.session_store.append(list(session_row(row)))
+        self._refresh_calls()
+
+    def _calls_filter(self):
+        selection = self._selection()
+        return selection["provider"], selection["source"], bool(self.cost_toggle.get_active())
+
+    def _refresh_calls(self):
+        """Loads the first page once per filter; afterwards only counts what is new.
+
+        The list is not replaced under the reader: new calls are announced and
+        shown when asked for.
+        """
+        key = self._calls_filter()
+        if key != self._calls_key:
+            self._load_calls(None)
+            return
+        newest = self.call_rows[0] if self.call_rows else None
+        count = (self.runtime.store.events_newer_than(newest["ts"], newest["id"], key[0], key[1])
+                 if newest else len(self.runtime.store.recent_events(1, None, key[0], key[1])))
+        self._set_calls_note(count)
+
+    def _load_calls(self, before):
+        provider, source, show_cost = key = self._calls_filter()
+        page = build_calls(self.runtime, before, provider=provider, source=source)
+        if before is None:
+            self.call_rows = []
+            self.call_store.clear()
+        self._calls_key = key
+        self.call_rows.extend(page["calls"])
+        for call in page["calls"]:
+            self.call_store.append(list(call_row(call, show_cost)))
+        self._calls_next = page["next"]
+        self.calls_more_button.set_sensitive(self._calls_next is not None)
+        self._set_calls_note(0)
+
+    def _set_calls_note(self, new_count):
+        parts = [new_calls_text(new_count)] if new_count else []
+        if not self.call_rows:
+            parts.append("No calls recorded yet.")
+        elif self._calls_next is None:
+            parts.append(f"All {len(self.call_rows):,} recorded calls are listed.")
+        else:
+            parts.append(f"The latest {len(self.call_rows):,} calls.")
+        self.calls_note.set_text(" · ".join(parts))
+
+    def _reload_calls(self):
+        self._load_calls(None)
+
+    def _more_calls(self):
+        if self._calls_next is not None:
+            self._load_calls(tuple(self._calls_next))
 
     def _selected_budget_id(self):
         model, row = self.budget_tree.get_selection().get_selected()

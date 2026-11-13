@@ -133,6 +133,19 @@ def main():
                     ui.tabs.set_current_page(3)
                     result["sessions"] = [tuple(row) for row in ui.session_store]
 
+                    # The calls tab lists both synthetic calls, newest first, and
+                    # follows the provider filter.
+                    ui.tabs.set_current_page(4)
+                    result["calls"] = [tuple(row) for row in ui.call_store]
+                    result["calls_note"] = ui.calls_note.get_text()
+                    result["more_enabled"] = ui.calls_more_button.get_sensitive()
+                    ui.provider_filter.set_active_id("openai")
+                    result["calls_openai"] = [row[1] for row in ui.call_store]
+                    ui.cost_toggle.set_active(False)
+                    result["calls_cost_hidden"] = [row[6] for row in ui.call_store]
+                    ui.cost_toggle.set_active(True)
+                    ui.provider_filter.set_active_id("")
+
                     # Delete asks first; "No" keeps it, "Yes" removes it.
                     ui.tabs.set_current_page(2)
                     answers.append(("Delete budget", None, "NO"))

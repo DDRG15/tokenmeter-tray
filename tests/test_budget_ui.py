@@ -242,6 +242,15 @@ def test_the_native_tabs_add_edit_silence_and_delete_a_budget(tmp_path):
     ((when, tokens, calls, _percent, source),) = r["sessions"]
     assert when.endswith("· now") and (tokens, calls, source) == ("120", "1", "estimated")
 
+    assert [row[1] for row in r["calls"]] == ["anthropic · synthetic-anthropic",
+                                              "openai · synthetic-openai"] or \
+        [row[1] for row in r["calls"]] == ["openai · synthetic-openai",
+                                           "anthropic · synthetic-anthropic"]
+    assert all(row[2] == "Subscription" and row[6] == "—" for row in r["calls"]), "no price: a dash"
+    assert r["calls_note"] == "All 2 recorded calls are listed." and r["more_enabled"] is False
+    assert r["calls_openai"] == ["openai · synthetic-openai"]
+    assert r["calls_cost_hidden"] == [""]
+
     assert (r["after_delete_no"], r["after_delete_yes"], r["stored_after_delete"]) == (1, 0, 0)
     assert r["calls_kept"] == 2, "deleting a budget never touches the usage history"
     assert r["dialogs"] == ["New budget", "New budget", "Operation failed", "New budget",
