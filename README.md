@@ -62,7 +62,7 @@ The Linux desktop and MCP serve different purposes:
 
 | Interface | Purpose | Linux implementation |
 |---|---|---|
-| Desktop | Tray icon, native controls, history, exports and calibration | GTK 3 and Ayatana; see [LINUX.md](LINUX.md) |
+| Desktop | Tray icon, native controls, history, personal budgets, past sessions, exports and calibration | GTK 3 and Ayatana; see [LINUX.md](LINUX.md) |
 | Optional MCP | Read-only local usage queries from an MCP client | Separate Python environment, launched on demand over stdin/stdout; see [MCP.md](MCP.md) |
 
 The Windows desktop uses Tk and WebView2. The optional MCP server
