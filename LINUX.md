@@ -11,6 +11,8 @@ claimed as tested.
 Distribution Python 3.12 with venv, PyGObject, GTK 3 and the Ayatana AppIndicator 3
 typelib must already be available. On Mint/Ubuntu these are provided by
 python3-venv, python3-gi, gir1.2-gtk-3.0 and gir1.2-ayatanaappindicator3-0.1.
+`python3-gi-cairo` is recommended: with it the History chart shows each day split by
+model; without it the chart falls back to one plain bar per day.
 The installer checks them and never installs system packages automatically.
 
 ## User installation
@@ -70,7 +72,8 @@ data-quality line that names anything that makes those figures less than exact.
 
 Overview shows Claude session/weekly usage, provider/model tokens with each
 model's billing type, API-equivalent estimates and Codex's recorded limits. Percentages keep their own plan scope.
-History provides filters, a chart and 7/30/90-day table. Unknown days are marked
+History provides filters, a chart of each day split by model (the five largest and "Others",
+with a legend and a tooltip per day) and a 7/30/90-day table. Unknown days are marked
 as unknown, not zero. CSV/JSON exports use the selected filters and protect app
 files. Budgets lists your personal limits with what each one has used in its
 current day, week or month; an amount that may be missing something is shown as

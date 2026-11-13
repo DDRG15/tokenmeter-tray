@@ -8,7 +8,7 @@ import signal
 import tempfile
 from pathlib import Path
 
-from .. import budgets as budget_rules
+from .. import budgets as budget_rules, stackchart
 from ..billing import label as billing_label
 from ..config import data_dir
 from ..dashboard import (
@@ -143,6 +143,9 @@ class LinuxShell:
         self.notifier = notifier if notifier is not None else DesktopNotifier()
         self._chart_key = None
         self.chart_bars = []
+        self.chart_mode = "bars"
+        self.stack = {"series": [], "days": [], "peak": 0}
+        self.chart_rects = []
         self.window = self.indicator = None
         self._sources = []
         self._icons = None
@@ -228,15 +231,32 @@ class LinuxShell:
         self.history_summary = self._label()
         history.pack_start(self.history_summary, False, False, 0)
         self.chart = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2, homogeneous=True)
-        self.chart.set_size_request(-1, 110)
+        self.chart.set_size_request(-1, 90)
         history.pack_start(self.chart, False, False, 0)
+        # The stacked chart is drawn with Cairo. Its bridge is a separate system
+        # package; without it the plain per-day bars are kept.
+        try:
+            gi.require_foreign("cairo")
+            self.chart_mode = "stack"
+        except Exception:
+            self.chart_mode = "bars"
+        if self.chart_mode == "stack":
+            self.chart_area = Gtk.DrawingArea()
+            self.chart_area.set_has_tooltip(True)
+            self.chart_area.connect("draw", self._draw_chart)
+            self.chart_area.connect("query-tooltip", self._chart_tooltip)
+            self.chart.set_homogeneous(False)
+            self.chart.pack_start(self.chart_area, True, True, 0)
+            self.chart_legend = self._label()
+            self.chart_legend.set_selectable(False)
+            history.pack_start(self.chart_legend, False, False, 0)
         self.history_store = Gtk.ListStore(str, str, str, str)
         tree = Gtk.TreeView(model=self.history_store)
         for column, title in enumerate(("Day", "Tokens", "Calls", "Coverage")):
             cell = Gtk.CellRendererText()
             tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
         scroll = Gtk.ScrolledWindow()
-        scroll.set_min_content_height(110)
+        scroll.set_min_content_height(70)
         scroll.add(tree)
         history.pack_start(scroll, True, True, 0)
         note = self._label()
@@ -674,6 +694,11 @@ class LinuxShell:
         if key == self._chart_key:
             return
         self._chart_key = key
+        if self.chart_mode == "stack":
+            self.stack = self.history_data["stack"]
+            self.chart_legend.set_markup(stackchart.legend_markup(self.stack) or "No usage in this range")
+            self.chart_area.queue_draw()
+            return
         for child in self.chart.get_children():
             self.chart.remove(child)
             child.destroy()
@@ -691,6 +716,23 @@ class LinuxShell:
             self.chart.pack_start(widget, True, True, 0)
             self.chart_bars.append(widget)
         self.chart.show_all()
+
+    def _draw_chart(self, area, context):
+        width, height = area.get_allocated_width(), area.get_allocated_height()
+        self.chart_rects = stackchart.layout(self.stack, width, height)
+        for rect in self.chart_rects:
+            color = "#9A9A9A" if rect.series < 0 else self.stack["series"][rect.series]["color"]
+            context.set_source_rgb(*(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)))
+            context.rectangle(rect.x, rect.y, rect.width, rect.height)
+            context.fill()
+        return False
+
+    def _chart_tooltip(self, area, x, y, _keyboard, tooltip):
+        text = stackchart.hit(self.stack, self.chart_rects, x, y, area.get_allocated_width())
+        if text is None:
+            return False
+        tooltip.set_text(text)
+        return True
 
     def _prompt(self, title, text, initial=""):
         Gtk = self.Gtk

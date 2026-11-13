@@ -15,7 +15,7 @@ import time
 
 from datetime import datetime
 
-from . import __version__
+from . import __version__, stackchart
 from .billing import label as billing_label
 from .budgets import period_bounds
 from .models import BILLING_API, BILLING_LOCAL, BILLING_SUBSCRIPTION
@@ -569,7 +569,17 @@ def build_history(app, days: int, now: float | None = None, provider: str = "", 
     last = len(bars) - 1
     day_rows = app.store.totals_by_model_day(local_midnight(bars[0].day), provider, source)
     models, cost, billing = _models(day_rows)
+    # The same basis as the bars, so the segments of a day add up to its bar.
+    day_models: dict[str, dict[str, int]] = {}
+    for row in day_rows:
+        name = f"{row.provider} · {row.model}"
+        split = day_models.setdefault(row.day, {})
+        split[name] = split.get(name, 0) + row.basis(cfg.percent_basis)
+    bar_data = [{"day": b.day.isoformat(),
+                 "label": f"{DAYS[b.day.weekday()]} {b.day.strftime('%d/%m')}",
+                 "tokens": b.tokens, "coverage": b.coverage} for b in bars]
     return {
+        "stack": stackchart.build_stack(bar_data, day_models),
         "days": days,
         "filters": {"provider": provider, "source": source, "options": app.store.filter_options()},
         "show_cost": cfg.show_cost,
