@@ -509,6 +509,8 @@ class LinuxShell:
             if self.runtime.config.alerts_enabled:
                 for alert in self.runtime.alerts.due(self.runtime.snapshot()):
                     self.notifier.notify(alert.title, alert.message)
+                for alert in self.runtime.due_budget_alerts():
+                    self.notifier.notify(alert.title, alert.message)
         except Exception:
             log.exception("Linux shell update failed")
             self.exit_code = 1
