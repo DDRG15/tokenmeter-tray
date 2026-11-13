@@ -179,6 +179,8 @@ def test_manual_reset_persists_the_floor_without_erasing_history_or_other_state(
         "manual_reset_ts": repr(NOW),
         "session_web_start_ts": repr(web_start),
         "weekly_reset_ts": repr(weekly_reset),
+        # When the user set it: a reset reported later by Claude Code replaces it.
+        "weekly_reset_set_at": repr(NOW),
         "alerts_fired": alerts_before,
     }
     assert not runtime.snapshot().has_activity
@@ -367,7 +369,7 @@ def test_basis_and_scope_apply_to_both_trackers_after_reopening(
     assert week.percent == pytest.approx(expected_used / 10)
     assert saved_config()["percent_scope"] == scope
     assert saved_config()["percent_basis"] == basis
-    assert set(persisted_state(reopened)) == {"weekly_reset_ts"}
+    assert set(persisted_state(reopened)) == {"weekly_reset_ts", "weekly_reset_set_at"}
 
 
 def test_unconfigured_week_moves_its_lookback_without_persisting_an_anchor(legacy):
@@ -411,7 +413,10 @@ def test_configured_week_rolls_on_its_exact_reset_and_keeps_the_original_anchor(
     assert later.start_ts == reset + 9 * days * DAY
     assert later.end_ts == reset + 10 * days * DAY
     assert later.used_tokens == 0
-    assert persisted_state(reopened) == {"weekly_reset_ts": repr(reset)}
+    # The reset and the moment it was set persist as entered; rolling the cycle
+    # forward never rewrites them.
+    assert persisted_state(reopened) == {"weekly_reset_ts": repr(reset),
+                                         "weekly_reset_set_at": repr(NOW)}
     assert saved_config()["weekly_window_days"] == days
 
 

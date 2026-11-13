@@ -19,6 +19,7 @@ from . import __version__
 from .billing import label as billing_label
 from .models import BILLING_API, BILLING_LOCAL, BILLING_SUBSCRIPTION
 from .history import RANGES_DAYS, daily_series, local_midnight, summarize
+from .session import SOURCE_CLAUDE_AI, SOURCE_CLAUDE_CODE, SOURCE_ESTIMATED, SOURCE_NONE
 from .pricing import cost_usd, format_cost, format_usd, is_lower_bound, VERIFIED_ON
 from .store import ModelTotals, Totals, merge_model_days
 
@@ -206,6 +207,25 @@ def _models(day_rows) -> tuple[list[dict], dict, list[dict]]:
 
 CODEX_STALE_S = 6 * 3600
 
+SESSION_SOURCE_SHORT = {
+    SOURCE_CLAUDE_CODE: "from Claude Code",
+    SOURCE_CLAUDE_AI: "from claude.ai",
+    SOURCE_ESTIMATED: "estimated",
+    SOURCE_NONE: "",
+}
+SESSION_SOURCE_TEXT = {
+    SOURCE_CLAUDE_CODE: "Session reset reported by Claude Code",
+    SOURCE_CLAUDE_AI: "Session reset copied from claude.ai",
+    SOURCE_ESTIMATED: ("Session start estimated from your first call here; "
+                       "usage elsewhere can make the real reset earlier"),
+    SOURCE_NONE: "",
+}
+WEEK_SOURCE_TEXT = {
+    "claude_code": "weekly reset reported by Claude Code",
+    "claude_ai": "weekly reset copied from claude.ai",
+    "none": "",
+}
+
 
 def _remaining(seconds: float) -> str:
     secs = max(0, int(seconds))
@@ -289,9 +309,12 @@ def build_state(app, now: float | None = None, provider: str = "", source: str =
     snap = app.snapshot()
     origin, origin_warn = app.calibration_health()
 
+    anchor_source = app.session.anchor_source(now)
     if snap.has_activity:
         window_label = f"Session resets · {cfg.session_window_hours:g} h window"
-        reset_text = f"at {snap.reset_at_text()}"
+        # The reset is only as good as where the session start came from, so
+        # the two are shown together.
+        reset_text = f"at {snap.reset_at_text()} · {SESSION_SOURCE_SHORT[anchor_source]}"
     else:
         window_label = "No active session"
         reset_text = f"the {cfg.session_window_hours:g} h window starts with the next call"
@@ -309,6 +332,8 @@ def build_state(app, now: float | None = None, provider: str = "", source: str =
         "countdown": snap.countdown_text() if snap.has_activity else "--:--:--",
         "window_label": window_label,
         "reset_text": reset_text,
+        "source": {"kind": anchor_source, "text": SESSION_SOURCE_TEXT[anchor_source],
+                   "estimated": anchor_source == SOURCE_ESTIMATED},
         "origin": {"text": origin, "warn": origin_warn},
         "level": level(snap.percent, cfg.warn_percent, cfg.danger_percent, snap.has_activity),
         "estimated_unseen": snap.estimated_unseen_tokens,
@@ -318,6 +343,7 @@ def build_state(app, now: float | None = None, provider: str = "", source: str =
     if cfg.weekly_enabled:
         w = app.weekly_snapshot()
         w_origin, w_warn = app.weekly_origin()
+        w_source = app.weekly.reset_and_source()[1]
         weekly.update({
             "configured": w.configured,
             "percent": w.percent if w.configured else None,
@@ -331,6 +357,7 @@ def build_state(app, now: float | None = None, provider: str = "", source: str =
                 if w.configured else f"{w.used_tokens:,} tokens in the last 7 days"
             ),
             "origin": {"text": w_origin, "warn": w_warn},
+            "source": {"kind": w_source, "text": WEEK_SOURCE_TEXT[w_source]},
             "level": level(w.percent, cfg.warn_percent, cfg.danger_percent, w.configured),
         })
 

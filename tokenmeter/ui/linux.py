@@ -228,7 +228,7 @@ class LinuxShell:
         pct = session["percent"]
         percent = "—" if pct is None else f"{pct:.1f}%"
         lines = [f"Claude session: {percent} · {session['countdown']}",
-                 session["origin"]["text"], state["general_window"],
+                 session["source"]["text"], session["origin"]["text"], state["general_window"],
                  f"Input {tokens['input']:,} · Output {tokens['output']:,}",
                  f"Cache read {tokens['cache_read']:,} · write {tokens['cache_write']:,}",
                  f"Calls: {tokens['calls']:,}"]
@@ -241,7 +241,8 @@ class LinuxShell:
         limits = []
         week = state["weekly"]
         if week["enabled"]:
-            limits.extend(("Claude week: " + week["detail"], week["origin"]["text"]))
+            limits.extend(("Claude week: " + week["detail"], week["origin"]["text"],
+                           week.get("source", {}).get("text", "")))
         codex = state["codex"]
         if codex:
             limits.append(f"Codex {codex['plan']} · captured {codex['age_text']}" +

@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .. import official_limits
 from ..billing import CachedBilling, apply_override
 from ..models import UsageEvent
 from ..store import Store
@@ -51,6 +52,23 @@ def parse_timestamp(raw: object) -> float | None:
     return dt.timestamp()
 
 
+# Model name Claude Code gives to a message it wrote itself instead of a model.
+SYNTHETIC_MODEL = "<synthetic>"
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens",
+              "cache_read_input_tokens")
+
+
+def limit_notice_from_line(line: str) -> official_limits.LimitNotice | None:
+    """The plan-limit reset a transcript line reports, if it reports one."""
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return official_limits.notice_from_record(obj, parse_timestamp(obj.get("timestamp")))
+
+
 def event_from_line(line: str) -> UsageEvent | None:
     """Converts a transcript line into a `UsageEvent`, or None if it does not apply."""
     return parse_line(line)[0]
@@ -75,6 +93,13 @@ def parse_line(line: str) -> tuple[UsageEvent | None, bool]:
         return None, False
     usage = message.get("usage")
     if not isinstance(usage, dict):
+        return None, False
+    made_up = obj.get("isApiErrorMessage") is True or message.get("model") == SYNTHETIC_MODEL
+    if made_up and not any(bounded_count(usage.get(key)) for key in USAGE_KEYS):
+        # Claude Code writes a failed request (a limit rejection, an overloaded
+        # server) as an assistant message of its own, with zeroed usage. No
+        # model answered: it is not a call. One that did carry tokens is kept,
+        # so this can never drop usage.
         return None, False
 
     def num(key: str) -> int:
@@ -255,6 +280,11 @@ class TranscriptCollector(Collector):
             self.stats.lines_read += 1
             # Byte pre-filter: most lines are user turns and tool results.
             # Discarding them avoids parsing their JSON.
+            if b'"rate_limit_info"' in raw:
+                notice = limit_notice_from_line(raw.decode("utf-8", errors="replace"))
+                if notice is not None:
+                    official_limits.record(self._store, notice)
+                continue  # a rejection is not a call
             if b'"usage"' not in raw or b'"assistant"' not in raw:
                 continue
             event, undated = parse_line(raw.decode("utf-8", errors="replace"))

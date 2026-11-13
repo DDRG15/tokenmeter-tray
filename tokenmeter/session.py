@@ -12,12 +12,19 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
+from . import official_limits
 from .config import Config
 from .store import ModelTotals, Store, Totals
 
 STATE_MANUAL_RESET = "manual_reset_ts"
 # Session start taken from the web. Authoritative while it is in effect.
 STATE_WEB_START = "session_web_start_ts"
+
+# Where the start of the current session comes from, best first.
+SOURCE_CLAUDE_CODE = "claude_code"  # reset time reported by Claude Code itself
+SOURCE_CLAUDE_AI = "claude_ai"      # reset time the user copied from claude.ai
+SOURCE_ESTIMATED = "estimated"      # deduced from the first local call
+SOURCE_NONE = "none"                # no session in progress
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,31 @@ class SessionTracker:
         except ValueError:
             return None
 
+    def known_start(self) -> tuple[float | None, str]:
+        """(start, source) of the latest session whose reset the account reported.
+
+        Two things report it: Claude Code, when the limit rejects a call, and
+        the user, by copying the reset from claude.ai. Both describe real
+        windows, so the later one is the more recent.
+        """
+        candidates = []
+        web = self.web_start_ts()
+        if web is not None:
+            candidates.append((web, SOURCE_CLAUDE_AI))
+        notice = official_limits.latest(self._store, official_limits.FIVE_HOUR)
+        if notice is not None:
+            candidates.append((notice.resets_at - self._config.window_seconds, SOURCE_CLAUDE_CODE))
+        return max(candidates) if candidates else (None, SOURCE_NONE)
+
+    def anchor_source(self, now: float | None = None) -> str:
+        """How much the start of the current session can be trusted."""
+        now = time.time() if now is None else now
+        start, has_activity = self.anchor(now)
+        if not has_activity:
+            return SOURCE_NONE
+        known, source = self.known_start()
+        return source if known == start else SOURCE_ESTIMATED
+
     def set_reset_from_web(self, reset_ts: float) -> float:
         """Anchors the session to the reset that claude.ai shows. Returns the start.
 
@@ -120,7 +152,7 @@ class SessionTracker:
         window = self._config.window_seconds
         manual = self.manual_reset_ts()
 
-        web = self.web_start_ts()
+        web, _source = self.known_start()
         if web is not None and manual <= web <= now < web + window:
             return web, True
         # A moving cutoff changes the partition of a continuous sequence.
