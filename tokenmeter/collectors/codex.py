@@ -35,6 +35,7 @@ from pathlib import Path
 
 from ..models import (
     BILLING_API,
+    BILLING_LOCAL,
     BILLING_SUBSCRIPTION,
     BILLING_UNKNOWN,
     UsageEvent,
@@ -52,8 +53,9 @@ STATE_RATE_LIMITS = "codex_rate_limits"
 LIMITS_FALLBACK_FILES = 5
 
 # Byte pre-filter: almost all lines are messages and tool calls, and parsing
-# their JSON is the bulk of a backfill's cost.
-_MARKERS = (b'"turn_context"', b'"token_usage_record"', b'"rate_limits"')
+# their JSON is the bulk of a backfill's cost. `session_meta` is one line per
+# rollout: it says which provider the calls went to.
+_MARKERS = (b'"turn_context"', b'"token_usage_record"', b'"rate_limits"', b'"session_meta"')
 
 
 def default_codex_root() -> Path:
@@ -85,6 +87,14 @@ class _FileContext:
 
     models: dict[str, str] = field(default_factory=dict)  # turn_id → model
     plan: str = ""  # last `plan_type` seen in this file
+    model_provider: str = ""  # `session_meta.model_provider`: where the calls went
+
+
+# Codex's built-in providers for a model on this machine (`codex --oss`). A call
+# to them is local whatever login `auth.json` holds: the login belongs to the
+# machine, not to the call. A provider the user defines in config.toml is not
+# recognized here, since its name says nothing about where it points.
+LOCAL_MODEL_PROVIDERS = frozenset({"ollama", "lmstudio", "ollama-chat"})
 
 
 def _int(value: object) -> int:
@@ -123,7 +133,7 @@ def event_from_record(
 
 
 def parse_record(
-    obj: dict, model: str, billing: str, plan: str
+    obj: dict, model: str, billing: str, plan: str, provider: str = "openai"
 ) -> tuple[UsageEvent | None, bool]:
     """(event, undated) for a `token_usage_record`.
 
@@ -163,7 +173,7 @@ def parse_record(
         return None, True
     return UsageEvent(
         ts=ts,
-        provider="openai",
+        provider=provider,
         model=model or "unknown",
         input_tokens=net_input,
         output_tokens=_int(usage.get("output_tokens")),
@@ -403,7 +413,11 @@ class CodexCollector(Collector):
             if not isinstance(payload, dict):
                 continue
             kind = obj.get("type")
-            if kind == "turn_context":
+            if kind == "session_meta":
+                provider = payload.get("model_provider")
+                if isinstance(provider, str) and provider.strip():
+                    ctx.model_provider = provider.strip().lower()
+            elif kind == "turn_context":
                 turn_id, model = payload.get("turn_id"), payload.get("model")
                 if isinstance(turn_id, str) and turn_id and isinstance(model, str) and model:
                     ctx.models[turn_id] = model
@@ -428,14 +442,17 @@ class CodexCollector(Collector):
 
         events: list[UsageEvent] = []
         if records:
-            if ctx.plan:
+            provider = "openai"
+            if ctx.model_provider in LOCAL_MODEL_PROVIDERS:
+                billing, plan, provider = BILLING_LOCAL, "", ctx.model_provider
+            elif ctx.plan:
                 billing, plan = BILLING_SUBSCRIPTION, ctx.plan
             else:
                 billing, plan = billing_from_auth_mode(self._auth_mode)
             for obj in records:
                 turn_id = obj["payload"].get("turn_id")
                 model = ctx.models.get(turn_id, "") if isinstance(turn_id, str) else ""
-                event, undated = parse_record(obj, model, billing, plan)
+                event, undated = parse_record(obj, model, billing, plan, provider)
                 if undated:
                     self.stats.events_undated += 1
                 if event is not None:
