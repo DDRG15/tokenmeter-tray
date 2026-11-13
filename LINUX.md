@@ -64,6 +64,10 @@ validates first, retains a previous backup, closes collectors and exits afterwar
 
 ## Interface
 
+The window opens collapsed: the Claude session and week, the current month and a
+data-quality line that names anything that makes those figures less than exact.
+**Details** expands it and the choice is remembered; closing the window still quits.
+
 Overview shows Claude session/weekly usage, provider/model tokens with each
 model's billing type, API-equivalent estimates and Codex's recorded limits. Percentages keep their own plan scope.
 History provides filters, a chart and 7/30/90-day table. Unknown days are marked
@@ -71,7 +75,8 @@ as unknown, not zero. CSV/JSON exports use the selected filters and protect app
 files. Budgets lists your personal limits with what each one has used in its
 current day, week or month; an amount that may be missing something is shown as
 a minimum with its reason. Sessions lists past sessions and whether each window
-was reported by Claude Code, copied from claude.ai or estimated. Settings provides manual budget, calibration from claude.ai, weekly reset,
+was reported by Claude Code, copied from claude.ai or estimated. Calls lists the latest calls one page at a time, each with its
+tokens, billing type and exact API equivalent. Settings provides backups, the API-equivalent switch, manual budget, calibration from claude.ai, weekly reset,
 cache basis, alerts and session reset without deleting history. Notifications
 use an existing desktop notification service and are recalled on exit.
 

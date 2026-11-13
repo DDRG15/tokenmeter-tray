@@ -79,6 +79,24 @@ def main():
 
             def drive():
                 try:
+                    # The window opens collapsed: the summary and its button only.
+                    result["collapsed_at_start"] = not ui.details.get_visible()
+                    result["collapsed_height"] = ui.window.get_size()[1]
+                    result["compact"] = ui.compact.get_text()
+                    result["button_collapsed"] = ui.details_button.get_label()
+                    ui.details_button.clicked()
+                    # The resize is applied by the display server, not at once.
+                    deadline = time.monotonic() + 3
+                    while (ui.window.get_size()[1] <= result["collapsed_height"]
+                           and time.monotonic() < deadline):
+                        ui.Gtk.main_iteration_do(False)
+                        time.sleep(0.01)
+                    result["expanded"] = ui.details.get_visible() and ui.tabs.get_visible()
+                    result["expanded_height"] = ui.window.get_size()[1]
+                    result["button_expanded"] = ui.details_button.get_label()
+                    result["remembered"] = runtime.store.get_state("ui_details_expanded")
+                    result["still_running"] = not ui._closed
+
                     ui.tabs.set_current_page(2)
                     result["empty_note"] = ui.budget_note.get_text()
                     result["defaults"] = None

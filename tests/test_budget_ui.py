@@ -18,7 +18,7 @@ from tokenmeter.budgets import (
 )
 from tokenmeter.models import UsageEvent
 from tokenmeter.pricing import usd_to_pico
-from tokenmeter.ui.linux import budget_row, session_row
+from tokenmeter.ui.linux import budget_row, compact_lines, session_row
 
 ROOT = Path(__file__).resolve().parents[1]
 FORM = {"name": "Monthly cap", "metric": "money", "token_basis": "all", "period": "month",
@@ -220,6 +220,16 @@ def test_the_native_tabs_add_edit_silence_and_delete_a_budget(tmp_path):
     assert r["errors"] == [] and r["unanswered"] == 0 and r["closed"]
     assert "No budgets yet" in r["empty_note"]
 
+    # Collapsed first; "Details" expands without closing anything, and the
+    # choice is remembered for the next start.
+    assert r["collapsed_at_start"] and r["button_collapsed"] == "Details"
+    assert r["expanded"] and r["button_expanded"] == "Hide details" and r["still_running"]
+    assert r["collapsed_height"] < r["expanded_height"]
+    assert r["remembered"] == "1"
+    lines = r["compact"].splitlines()
+    assert lines[0].startswith("Claude session: ") and "resets at" in lines[0]
+    assert lines[-1].startswith("Data quality: ")
+
     # Added: 190 tokens seen against a limit of 100 → exceeded, shown with its mark.
     ((_, name, usage, detail),) = r["after_add"]
     assert (name, usage) == ("Daily tokens", "■ 190 of 100 · 190%")
@@ -270,3 +280,104 @@ def test_reasons_are_written_for_one_call_and_for_several(tmp_path):
         "1 call was cut before its usage arrived",
     ]
     assert budget_row(data)[3].count("\nMinimum: ") == 2
+
+
+# -- the collapsed window -----------------------------------------------------
+
+
+def compact_state(app, monkeypatch=None):
+    now = time.time()
+    return dashboard.build_state(app, now), dashboard.build_month(app, now)
+
+
+def test_the_collapsed_window_shows_session_week_month_and_quality(tmp_path):
+    app = app_without_tk(tmp_path)
+    app.store.add_event(UsageEvent(ts=time.time() - 60, provider="anthropic", model="claude-opus-5",
+                                   input_tokens=50_000, output_tokens=0, dedupe_key="a",
+                                   billing="subscription"))
+    app.weekly.set_reset_in(2 * 86400)
+    lines = compact_lines(*compact_state(app))
+    assert lines[0].startswith("Claude session: 50% · 04:5") and lines[0].endswith("· estimated")
+    assert lines[1].startswith("Claude week: ") and "resets in 1d 23h" in lines[1]
+    assert lines[2].endswith(": 50,000 tokens in 1 calls · $0.25 API equivalent")
+    assert lines[3] == "Data quality: the session reset is estimated"
+    assert len(lines) == 4
+
+
+def test_the_quality_line_is_always_there_and_names_every_gap(tmp_path):
+    """An empty line would read as "all fine" both when it is and when nobody
+    checked, so it says so in words either way."""
+    app = app_without_tk(tmp_path)
+    assert compact_lines(*compact_state(app))[-1] == (
+        "Data quality: nothing missing in what was recorded")
+    now = time.time()
+    for key, model, complete in (("a", "claude-haiku-5-5", True), ("b", "claude-opus-5", False)):
+        app.store.add_event(UsageEvent(ts=now - 60, provider="anthropic", model=model,
+                                       input_tokens=10, output_tokens=0, dedupe_key=key,
+                                       usage_complete=complete))
+    quality = compact_lines(*compact_state(app))[-1]
+    assert "priced at their base tier, so the amount is a minimum" in quality
+    assert "1 call was cut before the usage arrived" in quality
+    assert "the session reset is estimated" in quality
+
+
+def test_a_model_without_a_price_is_named_in_the_quality_line(tmp_path):
+    app = app_without_tk(tmp_path)
+    app.store.add_event(UsageEvent(ts=time.time() - 60, provider="anthropic",
+                                   model="model-without-price", input_tokens=10, output_tokens=0,
+                                   dedupe_key="a"))
+    lines = compact_lines(*compact_state(app))
+    # No priced call at all: a dash, never "$0.00", and the reason below.
+    assert lines[2].endswith("· — API equivalent")
+    assert "some models have no verified price" in lines[-1]
+
+
+def test_hiding_costs_hides_the_month_amount_and_its_price_notes(tmp_path):
+    app = app_without_tk(tmp_path)
+    app.config.show_cost = False
+    app.store.add_event(UsageEvent(ts=time.time() - 60, provider="anthropic",
+                                   model="model-without-price", input_tokens=10, output_tokens=0,
+                                   dedupe_key="a"))
+    lines = compact_lines(*compact_state(app))
+    assert "API equivalent" not in "\n".join(lines) and "price" not in lines[-1]
+    assert lines[2].endswith(": 10 tokens in 1 calls")
+
+
+def test_without_a_session_or_a_week_it_says_so(tmp_path):
+    app = app_without_tk(tmp_path)
+    lines = compact_lines(*compact_state(app))
+    assert lines[0].startswith("Claude session: none in progress")
+    assert lines[1] == "Claude week: reset time not known yet"
+    app.config.weekly_enabled = False
+    assert not any(line.startswith("Claude week") for line in compact_lines(*compact_state(app)))
+
+
+def test_the_month_is_the_calendar_month_and_reports_lost_history(tmp_path):
+    from tokenmeter.store import Store
+    app = app_without_tk(tmp_path)
+    app.store.close()
+    app.store = Store(tmp_path / "short.db", retain_days=0)
+    app.session._store = app.weekly._store = app.store  # noqa: SLF001
+    now = time.time()
+    month = dashboard.build_month(app, now)
+    assert month["truncated"] is True and month["calls"] == 0
+    assert "the month starts before the history that is kept" in compact_lines(
+        dashboard.build_state(app, now), month)[-1]
+
+
+def test_the_month_name_does_not_follow_the_system_language(tmp_path, monkeypatch):
+    """The window is in English; a Spanish system must not turn one word of it
+    into "noviembre"."""
+    import locale
+    app = app_without_tk(tmp_path)
+    for name in ("es_PE.UTF-8", "es_ES.UTF-8", "de_DE.UTF-8"):
+        try:
+            locale.setlocale(locale.LC_TIME, name)
+            break
+        except locale.Error:
+            continue
+    try:
+        label = dashboard.build_month(app, 1_794_500_000.0)["label"]  # 12 November 2026
+    finally:
+        locale.setlocale(locale.LC_TIME, "C")
+    assert label == "November 2026"

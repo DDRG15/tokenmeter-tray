@@ -17,6 +17,7 @@ from datetime import datetime
 
 from . import __version__
 from .billing import label as billing_label
+from .budgets import period_bounds
 from .models import BILLING_API, BILLING_LOCAL, BILLING_SUBSCRIPTION
 from .history import RANGES_DAYS, daily_series, local_midnight, summarize
 from .session import SOURCE_CLAUDE_AI, SOURCE_CLAUDE_CODE, SOURCE_ESTIMATED, SOURCE_NONE
@@ -309,6 +310,29 @@ def build_budgets(app, now: float | None = None) -> dict:
     """Every personal budget with its current period, as plain data."""
     statuses, invalid = app.budget_statuses(now)
     return {"budgets": [status.as_dict() for status in statuses], "invalid": invalid}
+
+
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
+          "September", "October", "November", "December")
+
+
+def build_month(app, now: float | None = None) -> dict:
+    """The current calendar month in one line's worth of data: tokens, calls
+    and the API equivalent with its quality marks."""
+    now = time.time() if now is None else now
+    start, _end = period_bounds("month", now)
+    day_rows = app.store.totals_by_model_day(start, until_ts=now)
+    _rows, cost, _billing = _models(day_rows)
+    return {
+        # `%B` follows the system language; the rest of the window does not.
+        "label": f"{MONTHS[datetime.fromtimestamp(start).month - 1]} {datetime.fromtimestamp(start).year}",
+        "tokens": sum(r.io_tokens for r in day_rows),
+        "calls": sum(r.calls for r in day_rows),
+        "incomplete_calls": sum(r.incomplete_calls for r in day_rows),
+        "cost": cost,
+        # The month reaches further back than what is kept: calls are missing.
+        "truncated": start < app.store.history_start(now),
+    }
 
 
 CALLS_PAGE = 50

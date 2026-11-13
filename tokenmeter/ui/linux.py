@@ -11,7 +11,9 @@ from pathlib import Path
 from .. import budgets as budget_rules
 from ..billing import label as billing_label
 from ..config import data_dir
-from ..dashboard import build_budgets, build_calls, build_sessions, build_state, build_history
+from ..dashboard import (
+    build_budgets, build_calls, build_month, build_sessions, build_state, build_history,
+)
 from ..runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -67,6 +69,53 @@ def session_row(row: dict) -> tuple[str, str, str, str, str]:
     return when, f"{row['used']:,}", calls, f"{row['percent']:.0f}%", row["source_text"]
 
 
+STATE_DETAILS = "ui_details_expanded"
+# Fits a 1366x768 laptop screen with a panel; the lists scroll inside it.
+EXPANDED_HEIGHT = 680
+
+
+def compact_lines(state: dict, month: dict | None) -> list[str]:
+    """The few lines of the collapsed window: session, week, month and quality.
+
+    The last line is always there. It says what makes the figures above less
+    than exact, or that nothing does: silence would read as "all fine" both
+    when it is and when nobody checked.
+    """
+    session, week = state["session"], state["weekly"]
+    if session["has_activity"]:
+        lines = [f"Claude session: {session['percent']:.0f}% · {session['countdown']} left · "
+                 f"resets {session['reset_text']}"]
+    else:
+        lines = ["Claude session: none in progress · " + session["reset_text"]]
+    if week["enabled"]:
+        if week["configured"]:
+            lines.append(f"Claude week: {week['percent']:.0f}% · resets in {week['remaining_text']} "
+                         f"({week['reset_at_text']})")
+        else:
+            lines.append("Claude week: reset time not known yet")
+    issues = []
+    if month is not None:
+        amount = f"{month['tokens']:,} tokens in {month['calls']:,} calls"
+        if state["show_cost"]:
+            amount += f" · {month['cost']['text']} API equivalent"
+            if month["cost"].get("lower_bound"):
+                issues.append("some models are priced at their base tier, so the amount is a minimum")
+            elif month["cost"]["partial"]:
+                issues.append("some models have no verified price")
+        lines.append(f"{month['label']}: {amount}")
+        if month["incomplete_calls"]:
+            n = month["incomplete_calls"]
+            issues.append(("1 call was" if n == 1 else f"{n:,} calls were")
+                          + " cut before the usage arrived")
+        if month["truncated"]:
+            issues.append("the month starts before the history that is kept")
+    if session["has_activity"] and session["source"]["estimated"]:
+        issues.append("the session reset is estimated")
+    lines.append("Data quality: " + ("; ".join(issues) if issues
+                                     else "nothing missing in what was recorded"))
+    return lines
+
+
 def call_row(call: dict, show_cost: bool) -> tuple[str, str, str, str, str, str, str]:
     """(when, model, billing, input, output, cache, API equivalent) of one call.
 
@@ -111,6 +160,8 @@ class LinuxShell:
         self.call_rows = []
         self._calls_next = None
         self._calls_key = None
+        self.month_data = None
+        self.details = None
         self._side_refreshed_at = None
 
     def build(self):
@@ -128,9 +179,23 @@ class LinuxShell:
         self.window.set_default_size(620, 680)
         self.window.set_border_width(18)
         self.window.connect("delete-event", self._delete)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.body = outer
+        self.window.add(outer)
+        # Always visible: the collapsed window is this block and its buttons.
+        self.compact = self._label()
+        # Not selectable: as the first widget it would take the focus and open
+        # with all its text selected.
+        self.compact.set_selectable(False)
+        outer.pack_start(self.compact, False, False, 0)
+        self.details_button = Gtk.Button()
+        self.details_button.connect("clicked", lambda *_: self.set_details(not self.details_shown))
+        outer.pack_start(self.details_button, False, False, 0)
+        # Everything else lives in `details`, which the button shows and hides.
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.body = box
-        self.window.add(box)
+        box.set_no_show_all(True)
+        self.details = box
+        outer.pack_start(box, True, True, 0)
         filters = Gtk.Box(spacing=8)
         self.provider_filter = Gtk.ComboBoxText()
         self.source_filter = Gtk.ComboBoxText()
@@ -171,7 +236,7 @@ class LinuxShell:
             cell = Gtk.CellRendererText()
             tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
         scroll = Gtk.ScrolledWindow()
-        scroll.set_min_content_height(160)
+        scroll.set_min_content_height(110)
         scroll.add(tree)
         history.pack_start(scroll, True, True, 0)
         note = self._label()
@@ -198,7 +263,7 @@ class LinuxShell:
             self.budget_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
         self.budget_tree.set_tooltip_column(3)
         budget_scroll = Gtk.ScrolledWindow()
-        budget_scroll.set_min_content_height(180)
+        budget_scroll.set_min_content_height(150)
         budget_scroll.add(self.budget_tree)
         budgets_page.pack_start(budget_scroll, True, True, 0)
         self.budget_note = self._label()
@@ -222,7 +287,7 @@ class LinuxShell:
             cell = Gtk.CellRendererText()
             session_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
         session_scroll = Gtk.ScrolledWindow()
-        session_scroll.set_min_content_height(220)
+        session_scroll.set_min_content_height(150)
         session_scroll.add(session_tree)
         sessions_page.pack_start(session_scroll, True, True, 0)
         session_note = self._label()
@@ -240,7 +305,7 @@ class LinuxShell:
             cell = Gtk.CellRendererText()
             call_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
         call_scroll = Gtk.ScrolledWindow()
-        call_scroll.set_min_content_height(220)
+        call_scroll.set_min_content_height(150)
         call_scroll.add(call_tree)
         calls_page.pack_start(call_scroll, True, True, 0)
         self.calls_note = self._label()
@@ -270,17 +335,19 @@ class LinuxShell:
         self.alerts_toggle.set_active(self.runtime.config.alerts_enabled)
         self.alerts_toggle.connect("toggled", lambda *_: self._perform(self._toggle_alerts))
         settings.pack_start(self.alerts_toggle, False, False, 0)
-        self.tabs.append_page(settings, Gtk.Label(label="Settings"))
+        # Backups and the cost switch are settings too. Under the tabs they made
+        # the expanded window taller than a laptop screen.
+        self.cost_toggle = Gtk.CheckButton(label="Show API equivalent")
+        self.cost_toggle.set_active(self.runtime.config.show_cost)
+        self.cost_toggle.connect("toggled", lambda *_: self._perform(self._toggle_cost))
+        settings.pack_start(self.cost_toggle, False, False, 0)
         maintenance = Gtk.Box(spacing=8)
         self.backup_button = self._button("Create backup", self._backup)
         self.restore_button = self._button("Restore backup", self._restore)
         maintenance.pack_start(self.backup_button, True, True, 0)
         maintenance.pack_start(self.restore_button, True, True, 0)
-        box.pack_start(maintenance, False, False, 0)
-        self.cost_toggle = Gtk.CheckButton(label="Show API equivalent")
-        self.cost_toggle.set_active(self.runtime.config.show_cost)
-        self.cost_toggle.connect("toggled", lambda *_: self._perform(self._toggle_cost))
-        box.pack_start(self.cost_toggle, False, False, 0)
+        settings.pack_start(maintenance, False, False, 0)
+        self.tabs.append_page(settings, Gtk.Label(label="Settings"))
         controls = Gtk.Box(spacing=8)
         self.pause_button = Gtk.Button(label="Pause collectors")
         self.pause_button.connect("clicked", lambda *_: self.runtime.enqueue("pause"))
@@ -288,7 +355,10 @@ class LinuxShell:
         self.quit_button = Gtk.Button(label="Quit")
         self.quit_button.connect("clicked", lambda *_: self.close())
         controls.pack_start(self.quit_button, True, True, 0)
-        box.pack_end(controls, False, False, 0)
+        outer.pack_end(controls, False, False, 0)
+        for child in box.get_children():
+            child.show_all()
+        self.set_details(self.runtime.store.get_state(STATE_DETAILS) == "1", remember=False)
         menu = Gtk.Menu()
         self.open_item = Gtk.MenuItem(label="Open TokenMeter")
         self.open_item.connect("activate", lambda *_: self.show())
@@ -312,6 +382,26 @@ class LinuxShell:
     def show(self):
         self.window.show_all()
         self.window.present()
+
+    @property
+    def details_shown(self) -> bool:
+        return bool(self.details is not None and self.details.get_visible())
+
+    def set_details(self, shown: bool, remember: bool = True):
+        """Expands or collapses the window. Closing it is a different thing:
+        the X still quits, as before."""
+        self.details.set_visible(shown)
+        self.details_button.set_label("Hide details" if shown else "Details")
+        width = max(self.window.get_size()[0], 620)
+        if shown:
+            self.window.set_default_size(width, EXPANDED_HEIGHT)
+            self.window.resize(width, EXPANDED_HEIGHT)
+        else:
+            # Ask for the smallest height; GTK grows it to fit what is left.
+            self.window.set_default_size(width, 1)
+            self.window.resize(width, 1)
+        if remember:
+            self.runtime.store.set_state(STATE_DETAILS, "1" if shown else "0")
 
     def _label(self):
         label = self.Gtk.Label(xalign=0)
@@ -401,6 +491,7 @@ class LinuxShell:
             calls = "—" if bar["tokens"] is None else str(bar["calls"])
             self.history_store.append([bar["day"], value, calls, bar["coverage"]])
         self._refresh_side()
+        self.compact.set_text("\n".join(compact_lines(state, self.month_data)))
         self.pause_button.set_label("Resume collectors" if self.runtime.collectors_paused
                                     else "Pause collectors")
         snap = self.runtime.snapshot()
@@ -425,6 +516,7 @@ class LinuxShell:
                 and now - self._side_refreshed_at < SIDE_REFRESH_SECONDS):
             return
         self._side_refreshed_at = now
+        self.month_data = build_month(self.runtime, now)
         selected = self._selected_budget_id()
         self.budget_data = build_budgets(self.runtime, now)
         self.budget_store.clear()
