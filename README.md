@@ -336,6 +336,21 @@ showing the session, which is the number that changes by the minute.
 If the app stays closed for weeks, the cycle advances on its own when you reopen
 it.
 
+### Where a reset time comes from
+
+Every window says where its reset comes from, because they are not equally
+reliable:
+
+| Shown as | What it means |
+|---|---|
+| **from Claude Code** | When the plan's 5-hour or weekly limit rejects a call, Claude Code records the exact reset the account reports. TokenMeter reads it from the transcript. It covers usage on other devices too, and needs no setup. |
+| **from claude.ai** | You copied the reset in **Calibrate** or **Weekly window**. |
+| **estimated** | Nobody reported this window: it is counted from your first call on this machine. If you also used Claude in the browser or elsewhere, the real window started earlier and resets earlier. |
+
+Between a reset from Claude Code and one you copied, the most recent one wins. A
+rejection is only written when you actually hit a limit, so on a normal day the
+session is estimated until you calibrate it.
+
 ## The Windows window
 
 Click the icon → **Open TokenMeter**. It is an HTML page drawn in a frameless
@@ -425,6 +440,38 @@ app with several thresholds already crossed, it only alerts for the highest one.
 Turn them off from the menu (`Alerts at 60 / 85 / 100%`) or with
 `"alerts_enabled": false`. Change the thresholds in `alert_thresholds`.
 
+## Personal budgets
+
+A budget is a limit **you** set on your own recorded usage: "$25 of API
+equivalent this month", "2M tokens a day on OpenRouter", "this model, 500k
+output tokens a week". It is separate from the plan's session and weekly quota,
+and it is not an invoice.
+
+On Linux, the **Budgets** tab adds, edits, silences and deletes them. Each one has:
+
+- **a measure**: API equivalent in dollars, tokens (with or without cache),
+  input tokens or output tokens;
+- **a period**: a day, a week from Monday to Monday, or a calendar month, cut at
+  local midnight. A call at exactly midnight belongs to the new day;
+- **a scope**: all usage, one provider, or one exact model;
+- **a limit** and the percentages to be notified at (`60, 85, 100` by default;
+  leave it empty for none).
+
+Money is added up exactly, call by call, never from an account balance.
+
+**When the amount is only a minimum, it says so and why.** `≥ $5.00 of $10.00 ·
+at least 50%` appears when a model has no verified price, when a price is only
+known for its base tier, when a call was cut before its usage arrived, when the
+period starts before the history that is kept (`retain_days`), or when the system
+time zone changed since the budget was created. A minimum can prove a limit was
+passed; it never proves there is room left.
+
+Notices follow the same rule as the session alerts: one per threshold and per
+period, and only the highest one if several were crossed while the app was
+closed. Editing the limit or restarting does not repeat a notice.
+
+The Windows window does not show budgets yet.
+
 ### Why the cache is not in the percentage
 
 Cache tokens are recorded and shown, but they do not count toward the % by
@@ -443,6 +490,14 @@ cuts it short; the history is kept, only the window moves.
 The session anchor is derived from the data, not from the clock: if the app was
 closed while Claude Code kept working, events with timestamps in the past are
 placed in the window they belong to instead of being lost.
+
+On Linux, the **Sessions** tab lists the past sessions with their tokens and
+calls. Every call belongs to exactly one session, so resetting a session never
+loses what the previous one used. Each row says whether its window was reported
+or estimated (see [Where a reset time comes from](#where-a-reset-time-comes-from)).
+
+A request that Claude Code could not complete (a limit rejection, an overloaded
+server) is not a call and is not counted.
 
 ## Streaming with OpenAI-style providers
 

@@ -22,12 +22,13 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .models import BILLING_LOCAL
-from .pricing import cost_pico, format_pico, is_lower_bound
+from .pricing import PICO_PER_USD, cost_pico, format_pico, is_lower_bound, usd_to_pico
 
 log = logging.getLogger(__name__)
 
@@ -202,6 +203,88 @@ def load_budgets(store) -> tuple[list[Budget], int]:
 
 def save_budget(store, budget: Budget) -> None:
     store.save_budget_row(budget.to_row())
+
+
+# -- the editor's form --------------------------------------------------------
+
+FORM_FIELDS = ("name", "metric", "token_basis", "period", "scope_kind", "scope_provider",
+               "scope_model", "limit", "thresholds")
+_TOKEN_SUFFIXES = {"k": 1_000, "m": 1_000_000}
+
+
+def parse_token_limit(text: str) -> int:
+    """A token limit as typed: "500000", "500,000", "500k", "2.5M".
+
+    Raises ValueError unless it is a whole number of tokens above zero.
+    """
+    cleaned = str(text).strip().lower().replace(",", "").replace("_", "").replace(" ", "")
+    factor = 1
+    if cleaned[-1:] in _TOKEN_SUFFIXES:
+        factor, cleaned = _TOKEN_SUFFIXES[cleaned[-1]], cleaned[:-1]
+    try:
+        amount = Decimal(cleaned) * factor
+    except InvalidOperation:
+        raise ValueError(f"not a number of tokens: {text!r}") from None
+    if not amount.is_finite() or amount != amount.to_integral_value() or not 0 < amount <= 10 ** 15:
+        raise ValueError(f"not a number of tokens: {text!r}")
+    return int(amount)
+
+
+def parse_thresholds(text: str) -> tuple[int, ...]:
+    """Percentages as typed: "60, 85, 100". Empty means no notices."""
+    parts = [p for p in str(text).replace("%", " ").replace(",", " ").split() if p]
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        raise ValueError("thresholds must be whole percentages, for example: 60, 85, 100") from None
+
+
+def budget_from_form(form: dict, existing: Budget | None = None) -> Budget:
+    """Builds a budget from the editor's text fields; raises ValueError with a
+    message for the user if any field does not make sense.
+
+    Editing keeps the id, the creation zone and whether it is enabled, so the
+    notices already given for the current period stay given.
+    """
+    metric = str(form.get("metric", "")).strip()
+    limit_text = str(form.get("limit", ""))
+    limit = usd_to_pico(limit_text) if metric == "money" else parse_token_limit(limit_text)
+    scope_kind = str(form.get("scope_kind", "all")).strip()
+    fields = {
+        "name": str(form.get("name", "")).strip(),
+        "metric": metric,
+        "token_basis": str(form.get("token_basis", "all")).strip() or "all",
+        "period": str(form.get("period", "")).strip(),
+        "scope_kind": scope_kind,
+        # Fields the chosen scope does not use are dropped, not kept hidden.
+        "scope_provider": str(form.get("scope_provider", "")).strip()
+        if scope_kind in ("provider", "model") else "",
+        "scope_model": str(form.get("scope_model", "")).strip() if scope_kind == "model" else "",
+        "limit": limit,
+        "thresholds": parse_thresholds(form.get("thresholds", "")),
+    }
+    if existing is not None:
+        return Budget(id=existing.id, timezone=existing.timezone, enabled=existing.enabled, **fields)
+    return Budget.create(**fields)
+
+
+def form_from_budget(budget: Budget | None = None) -> dict:
+    """The editor's fields for an existing budget, or the defaults for a new one."""
+    if budget is None:
+        return {"name": "", "metric": "money", "token_basis": "all", "period": "month",
+                "scope_kind": "all", "scope_provider": "", "scope_model": "", "limit": "",
+                "thresholds": ", ".join(str(t) for t in DEFAULT_THRESHOLDS)}
+    limit = (str(Decimal(budget.limit) / PICO_PER_USD) if budget.is_money else str(budget.limit))
+    if budget.is_money and "." in limit:
+        limit = limit.rstrip("0").rstrip(".")
+    return {"name": budget.name, "metric": budget.metric, "token_basis": budget.token_basis,
+            "period": budget.period, "scope_kind": budget.scope_kind,
+            "scope_provider": budget.scope_provider, "scope_model": budget.scope_model,
+            "limit": limit, "thresholds": ", ".join(str(t) for t in budget.thresholds)}
+
+
+def set_enabled(budget: Budget, enabled: bool) -> Budget:
+    return replace(budget, enabled=enabled)
 
 
 # -- periods ------------------------------------------------------------------

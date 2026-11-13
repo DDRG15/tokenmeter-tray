@@ -8,9 +8,10 @@ import signal
 import tempfile
 from pathlib import Path
 
+from .. import budgets as budget_rules
 from ..billing import label as billing_label
 from ..config import data_dir
-from ..dashboard import build_state, build_history
+from ..dashboard import build_budgets, build_sessions, build_state, build_history
 from ..runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,41 @@ def model_line(row: dict, show_cost: bool) -> str:
     if row["billing"] == "local":
         return line + " · local, no cost"
     return line + f" · {row['cost_text']} API equivalent"
+
+
+# The budgets and the session history add up days or months of calls. The window
+# refreshes every second; these two are recomputed at this pace, or at once
+# after the user changes something.
+SIDE_REFRESH_SECONDS = 15.0
+BUDGET_STATE_MARK = {"below": "", "warning": "▲ ", "danger": "▲▲ ", "exceeded": "■ "}
+BUDGET_CHOICES = {
+    "metric": (("money", "API equivalent (USD)"), ("tokens", "Tokens"),
+               ("input", "Input tokens"), ("output", "Output tokens")),
+    "token_basis": (("all", "input + output + cache"), ("io", "input + output")),
+    "period": (("day", "Day"), ("week", "Week (Monday to Monday)"), ("month", "Calendar month")),
+    "scope_kind": (("all", "All usage"), ("provider", "One provider"), ("model", "One model")),
+}
+
+
+def budget_row(data: dict) -> tuple[str, str, str, str]:
+    """(id, name, usage, detail) of one budget for the list.
+
+    The state is a mark in the text as well as a word, so it does not depend on
+    colour. A minimum always shows its first reason next to it.
+    """
+    name = data["name"] + ("" if data["enabled"] else " (notices off)")
+    usage = BUDGET_STATE_MARK[data["state"]] + data["summary"]
+    detail = f"{data['unit']} · {data['scope']} · this {data['period']}"
+    if data["cause_lines"]:
+        detail += " · minimum: " + "; ".join(data["cause_lines"])
+    return data["id"], name, usage, detail
+
+
+def session_row(row: dict) -> tuple[str, str, str, str, str]:
+    """(when, tokens, calls, percent, source) of one session for the table."""
+    when = f"{row['start_text']} – {row['end_text']}" + (" · now" if row["active"] else "")
+    calls = f"{row['calls']:,}" + (f" ({row['incomplete_calls']} cut)" if row["incomplete_calls"] else "")
+    return when, f"{row['used']:,}", calls, f"{row['percent']:.0f}%", row["source_text"]
 
 
 class LinuxShell:
@@ -49,6 +85,9 @@ class LinuxShell:
         self._active_dialog = None
         self._filter_options = None
         self.history_data = None
+        self.budget_data = {"budgets": [], "invalid": 0}
+        self.session_rows = []
+        self._side_refreshed_at = None
 
     def build(self):
         # Imports are deliberately local: even maintenance CLI commands must
@@ -121,6 +160,51 @@ class LinuxShell:
         exports.pack_start(self.export_csv_button, True, True, 0)
         history.pack_start(exports, False, False, 0)
         self.tabs.append_page(history, Gtk.Label(label="History"))
+        budgets_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        budgets_page.set_border_width(12)
+        intro = self._label()
+        intro.set_text("Limits you set on your own recorded usage. They are not the plan's "
+                       "quota, and the API equivalent is not an invoice.")
+        budgets_page.pack_start(intro, False, False, 0)
+        self.budget_store = Gtk.ListStore(str, str, str, str)
+        self.budget_tree = Gtk.TreeView(model=self.budget_store)
+        for column, title in ((1, "Budget"), (2, "This period"), (3, "What it measures")):
+            cell = Gtk.CellRendererText()
+            self.budget_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
+        budget_scroll = Gtk.ScrolledWindow()
+        budget_scroll.set_min_content_height(180)
+        budget_scroll.add(self.budget_tree)
+        budgets_page.pack_start(budget_scroll, True, True, 0)
+        self.budget_note = self._label()
+        budgets_page.pack_start(self.budget_note, False, False, 0)
+        budget_buttons = Gtk.Box(spacing=8)
+        for attribute, title, action in (
+            ("budget_add_button", "Add", self._add_budget),
+            ("budget_edit_button", "Edit", self._edit_budget),
+            ("budget_toggle_button", "Notices on / off", self._toggle_budget),
+            ("budget_delete_button", "Delete", self._delete_budget)):
+            button = self._button(title, action)
+            setattr(self, attribute, button)
+            budget_buttons.pack_start(button, True, True, 0)
+        budgets_page.pack_start(budget_buttons, False, False, 0)
+        self.tabs.append_page(budgets_page, Gtk.Label(label="Budgets"))
+        sessions_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        sessions_page.set_border_width(12)
+        self.session_store = Gtk.ListStore(str, str, str, str, str)
+        session_tree = Gtk.TreeView(model=self.session_store)
+        for column, title in enumerate(("Session", "Tokens", "Calls", "Of today's budget", "Window")):
+            cell = Gtk.CellRendererText()
+            session_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
+        session_scroll = Gtk.ScrolledWindow()
+        session_scroll.set_min_content_height(220)
+        session_scroll.add(session_tree)
+        sessions_page.pack_start(session_scroll, True, True, 0)
+        session_note = self._label()
+        session_note.set_text(
+            "Every call belongs to one session, so a reset loses nothing. \"estimated\" windows "
+            "start with your first call here; usage elsewhere can make the real one earlier.")
+        sessions_page.pack_start(session_note, False, False, 0)
+        self.tabs.append_page(sessions_page, Gtk.Label(label="Sessions"))
         settings = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         settings.set_border_width(12)
         for attribute, title, action in (
@@ -268,6 +352,7 @@ class LinuxShell:
             value = "No record" if bar["tokens"] is None else f"{bar['tokens']:,}"
             calls = "—" if bar["tokens"] is None else str(bar["calls"])
             self.history_store.append([bar["day"], value, calls, bar["coverage"]])
+        self._refresh_side()
         self.pause_button.set_label("Resume collectors" if self.runtime.collectors_paused
                                     else "Pause collectors")
         snap = self.runtime.snapshot()
@@ -283,6 +368,115 @@ class LinuxShell:
             self.indicator.set_icon_full(str(path), "TokenMeter")
             self._icon_key = key
         return state
+
+    def _refresh_side(self, force=False):
+        """Budgets and session history, at their own pace (see SIDE_REFRESH_SECONDS)."""
+        import time
+        now = time.time()
+        if (not force and self._side_refreshed_at is not None
+                and now - self._side_refreshed_at < SIDE_REFRESH_SECONDS):
+            return
+        self._side_refreshed_at = now
+        selected = self._selected_budget_id()
+        self.budget_data = build_budgets(self.runtime, now)
+        self.budget_store.clear()
+        for data in self.budget_data["budgets"]:
+            row = self.budget_store.append(list(budget_row(data)))
+            if data["id"] == selected:
+                self.budget_tree.get_selection().select_iter(row)
+        notes = []
+        if not self.budget_data["budgets"]:
+            notes.append("No budgets yet. Add one to be told when your own usage passes a limit.")
+        if self.budget_data["invalid"]:
+            notes.append(f"{self.budget_data['invalid']} stored budget(s) could not be read and are ignored.")
+        self.budget_note.set_text("\n".join(notes))
+        self.session_rows = build_sessions(self.runtime, now)
+        self.session_store.clear()
+        for row in self.session_rows:
+            self.session_store.append(list(session_row(row)))
+
+    def _selected_budget_id(self):
+        model, row = self.budget_tree.get_selection().get_selected()
+        return model[row][0] if row is not None else None
+
+    def _selected_budget(self):
+        """The stored budget selected in the list; raises if none is."""
+        budget_id = self._selected_budget_id()
+        stored, _invalid = budget_rules.load_budgets(self.runtime.store)
+        for budget in stored:
+            if budget.id == budget_id:
+                return budget
+        raise ValueError("Select a budget in the list first.")
+
+    def _budget_dialog(self, title, form):
+        """Shows the editor; returns the fields as typed, or None if cancelled."""
+        Gtk = self.Gtk
+        dialog = Gtk.Dialog(title=title, transient_for=self.window, modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Apply", Gtk.ResponseType.OK)
+        grid = Gtk.Grid(column_spacing=10, row_spacing=8)
+        grid.set_border_width(10)
+        dialog.get_content_area().pack_start(grid, True, True, 0)
+        controls = {}
+        labels = (("name", "Name"), ("metric", "Measure"), ("token_basis", "Tokens counted"),
+                  ("period", "Period"), ("scope_kind", "Applies to"),
+                  ("scope_provider", "Provider (as listed in the Provider filter)"),
+                  ("scope_model", "Model (exact name)"),
+                  ("limit", "Limit (dollars for API equivalent, tokens otherwise; 500k and 2M work)"),
+                  ("thresholds", "Notify at these percentages (empty for none)"))
+        for line, (field, text) in enumerate(labels):
+            label = Gtk.Label(label=text, xalign=0)
+            label.set_line_wrap(True)
+            label.set_max_width_chars(38)
+            grid.attach(label, 0, line, 1, 1)
+            if field in BUDGET_CHOICES:
+                control = Gtk.ComboBoxText()
+                for value, shown in BUDGET_CHOICES[field]:
+                    control.append(value, shown)
+                control.set_active_id(form[field])
+            else:
+                control = Gtk.Entry()
+                control.set_text(form[field])
+                control.set_activates_default(True)
+                control.set_hexpand(True)
+            label.set_mnemonic_widget(control)
+            grid.attach(control, 1, line, 1, 1)
+            controls[field] = control
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        self._budget_controls = controls
+        self._active_dialog = dialog
+        try:
+            dialog.show_all()
+            if dialog.run() != Gtk.ResponseType.OK or self._closed:
+                return None
+            return {field: (control.get_active_id() or "") if field in BUDGET_CHOICES
+                    else control.get_text() for field, control in controls.items()}
+        finally:
+            self._active_dialog = None
+            self._budget_controls = None
+            dialog.destroy()
+
+    def _add_budget(self):
+        form = self._budget_dialog("New budget", budget_rules.form_from_budget())
+        if form is not None:
+            budget_rules.save_budget(self.runtime.store, budget_rules.budget_from_form(form))
+
+    def _edit_budget(self):
+        current = self._selected_budget()
+        form = self._budget_dialog("Edit budget", budget_rules.form_from_budget(current))
+        if form is not None:
+            budget_rules.save_budget(self.runtime.store,
+                                     budget_rules.budget_from_form(form, current))
+
+    def _toggle_budget(self):
+        current = self._selected_budget()
+        budget_rules.save_budget(self.runtime.store,
+                                 budget_rules.set_enabled(current, not current.enabled))
+
+    def _delete_budget(self):
+        current = self._selected_budget()
+        if self._message("Delete budget", f"Delete \"{current.name}\"? Your usage history is not touched.",
+                         confirm=True):
+            self.runtime.store.delete_budget(current.id)
 
     def _update_chart(self, bars):
         key = tuple((b["day"], b["tokens"], b["coverage"]) for b in bars)
@@ -396,6 +590,7 @@ class LinuxShell:
             self._action_running = False
             if not self._closed:
                 self.body.set_sensitive(True)
+                self._side_refreshed_at = None  # the action may have changed a budget
                 self.refresh()
 
     def _run_dialog(self, dialog):
