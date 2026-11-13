@@ -243,7 +243,8 @@ of guessing it.
 Tray menu → **Calibrate with claude.ai…**
 
 1. Open `claude.ai → Settings → Usage` and look at `Current session`.
-2. Copy what `Resets …` says (for example `Fri 12:40 AM`). TokenMeter anchors the
+2. Copy what `Resets …` says, as is (for example `Resets at 2:50 PM`, `Fri 12:40 AM`,
+   or in Spanish `Se restablece a las 2:50 p.m.`). TokenMeter anchors the
    session to that time, so it starts when the website started it, including what
    you spent in the browser, on your phone or on another machine, which it cannot
    see.
@@ -319,7 +320,8 @@ one that bites.
 Menu → **Weekly window…**, and answer two questions with what you see under
 `This week`:
 
-1. what `Resets …` says, copied as is (`Thursday 3:00 AM`). A countdown
+1. what `Resets …` says, copied as is (`Thursday 3:00 AM`, or in Spanish
+   `Se restablece el jueves, 3:00 a.m.`). A countdown
    (`2d 4h`) or the number of hours left also works;
 2. which **percentage** it shows.
 

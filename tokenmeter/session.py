@@ -125,11 +125,15 @@ class SessionTracker:
             return web, True
         # A moving cutoff changes the partition of a continuous sequence.
         # Rebuild from a stable boundary, including the expired web anchor.
-        floor = max(manual, web if web is not None and web >= manual else 0.0)
+        web_rules = web is not None and manual <= web <= now
+        floor = web if web_rules else manual
         stamps = self._store.event_timestamps_since(floor, self._config.percent_scope)
         stamps = [ts for ts in stamps if ts <= now]
 
-        start: float | None = None
+        # An expired web anchor is still a session that existed: the calls made
+        # inside it belong to it, and the next session starts with the first
+        # call after it ended, as on claude.ai.
+        start: float | None = web if web_rules else None
         for ts in stamps:
             if start is None or ts >= start + window:
                 start = ts

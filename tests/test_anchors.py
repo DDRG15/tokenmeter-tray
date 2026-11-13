@@ -32,13 +32,16 @@ def at(text: str, scope: float = FIVE_H) -> datetime:
 
 
 @pytest.mark.parametrize("text", ["Resets Fri 12:40 AM", "Fri 12:40 AM", "fri 12:40am",
-                                  "00:40", "0:40", "vie 00:40", "12:40 a.m."])
+                                  "00:40", "0:40", "vie 00:40", "12:40 a.m.",
+                                  "Resets at 12:40 AM", "resets at 00:40",
+                                  "Se restablece a las 12:40 a.m.", "a las 0:40"])
 def test_session_time_copied_from_the_web(text):
     assert at(text) == datetime(2026, 10, 16, 0, 40)
 
 
 @pytest.mark.parametrize("text", ["Resets Thursday 3:00 AM", "Thursday 3:00 AM",
-                                  "jueves 03:00", "thu 3 am"])
+                                  "jueves 03:00", "thu 3 am", "Resets on Thursday at 3:00 AM",
+                                  "Se restablece el jueves, 3:00 a.m.", "el jueves a las 3:00"])
 def test_weekly_time_on_the_same_weekday_falls_next_week(text):
     """Today is Thursday at 21:41: "Thursday 3:00" is the one seven days from now."""
     assert at(text, SEVEN_D) == datetime(2026, 10, 22, 3, 0)
