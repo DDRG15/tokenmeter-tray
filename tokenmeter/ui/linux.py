@@ -48,13 +48,15 @@ def budget_row(data: dict) -> tuple[str, str, str, str]:
     """(id, name, usage, detail) of one budget for the list.
 
     The state is a mark in the text as well as a word, so it does not depend on
-    colour. A minimum always shows its first reason next to it.
+    colour. A minimum always shows every reason under what it measures.
     """
     name = data["name"] + ("" if data["enabled"] else " (notices off)")
     usage = BUDGET_STATE_MARK[data["state"]] + data["summary"]
     detail = f"{data['unit']} · {data['scope']} · this {data['period']}"
-    if data["cause_lines"]:
-        detail += " · minimum: " + "; ".join(data["cause_lines"])
+    # Each reason on its own line: appended to one long line it ends up beyond
+    # the edge of the window, which is where nobody reads it.
+    for reason in data["cause_lines"]:
+        detail += "\nMinimum: " + reason
     return data["id"], name, usage, detail
 
 
@@ -170,7 +172,9 @@ class LinuxShell:
         self.budget_tree = Gtk.TreeView(model=self.budget_store)
         for column, title in ((1, "Budget"), (2, "This period"), (3, "What it measures")):
             cell = Gtk.CellRendererText()
+            cell.set_property("yalign", 0.0)
             self.budget_tree.append_column(Gtk.TreeViewColumn(title, cell, text=column))
+        self.budget_tree.set_tooltip_column(3)
         budget_scroll = Gtk.ScrolledWindow()
         budget_scroll.set_min_content_height(180)
         budget_scroll.add(self.budget_tree)

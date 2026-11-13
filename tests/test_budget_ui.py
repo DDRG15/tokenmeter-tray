@@ -157,7 +157,8 @@ def test_a_minimum_shows_its_reason_in_the_row(tmp_path):
     (data,) = state_of(app, now, period="day", limit="4")["budgets"]
     _id, name, usage, detail = budget_row(data)
     assert usage == "■ ≥ $5.00 of $4.00 · at least 125%"
-    assert "minimum: 1 call(s) of a model without a verified price" in detail
+    assert detail == ("API equivalent · all usage · this day\n"
+                      "Minimum: 1 call of a model without a verified price is not in the amount")
 
 
 def test_a_budget_with_notices_off_says_so(tmp_path):
@@ -245,3 +246,18 @@ def test_the_native_tabs_add_edit_silence_and_delete_a_budget(tmp_path):
     assert r["calls_kept"] == 2, "deleting a budget never touches the usage history"
     assert r["dialogs"] == ["New budget", "New budget", "Operation failed", "New budget",
                             "Operation failed", "Edit budget", "Delete budget", "Delete budget"]
+
+
+def test_reasons_are_written_for_one_call_and_for_several(tmp_path):
+    app = app_without_tk(tmp_path)
+    now = time.time()
+    for key in "abc":
+        app.store.add_event(UsageEvent(ts=now - 60, provider="anthropic", model="claude-haiku-5-5",
+                                       input_tokens=10, output_tokens=0, dedupe_key=key,
+                                       usage_complete=key != "c"))
+    (data,) = state_of(app, now, period="day", limit="4")["budgets"]
+    assert data["cause_lines"] == [
+        "3 calls are priced at the base tier, which is a minimum",
+        "1 call was cut before its usage arrived",
+    ]
+    assert budget_row(data)[3].count("\nMinimum: ") == 2

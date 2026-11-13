@@ -386,14 +386,30 @@ class BudgetStatus:
 
     def cause_lines(self) -> list[str]:
         """The causes in words, in a stable order."""
-        texts = {
-            CAUSE_UNPRICED: "{n} call(s) of a model without a verified price are not in the amount",
-            CAUSE_TIERED_PRICE: "{n} call(s) are priced at the base tier, which is a minimum",
-            CAUSE_MISSING_USAGE: "{n} call(s) were cut before their usage arrived",
-            CAUSE_HISTORY_TRUNCATED: "the period starts before the history that is kept",
-            CAUSE_TIMEZONE_CHANGED: "the system time zone changed since this budget was created",
-        }
-        return [texts[c].format(n=self.causes[c]) for c in texts if c in self.causes]
+        def calls(n: int) -> str:
+            return "1 call" if n == 1 else f"{n:,} calls"
+
+        def verb(n: int, one: str, many: str) -> str:
+            return one if n == 1 else many
+
+        lines = []
+        for cause, count in ((c, self.causes[c]) for c in (
+                CAUSE_UNPRICED, CAUSE_TIERED_PRICE, CAUSE_MISSING_USAGE,
+                CAUSE_HISTORY_TRUNCATED, CAUSE_TIMEZONE_CHANGED) if c in self.causes):
+            if cause == CAUSE_UNPRICED:
+                lines.append(f"{calls(count)} of a model without a verified price "
+                             f"{verb(count, 'is', 'are')} not in the amount")
+            elif cause == CAUSE_TIERED_PRICE:
+                lines.append(f"{calls(count)} {verb(count, 'is', 'are')} priced at the base "
+                             "tier, which is a minimum")
+            elif cause == CAUSE_MISSING_USAGE:
+                lines.append(f"{calls(count)} {verb(count, 'was', 'were')} cut before "
+                             f"{verb(count, 'its', 'their')} usage arrived")
+            elif cause == CAUSE_HISTORY_TRUNCATED:
+                lines.append("the period starts before the history that is kept")
+            else:
+                lines.append("the system time zone changed since this budget was created")
+        return lines
 
     def as_dict(self) -> dict:
         """Plain data for a UI or a tool. Amounts are strings: a month of
