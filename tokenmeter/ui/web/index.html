@@ -969,7 +969,7 @@ const Demo = (() => {
   function modelsFor(io, calls) {
     return D.models.map(m => {
       const mio = Math.round(io * m.w), cost = m.rate == null ? null : mio * m.rate;
-      return { model: m.model, provider: m.provider, billing: m.billing, plan: m.plan, io: mio, calls: Math.round(calls * m.w), cost, cost_text: cost == null ? '—' : fmtUsd(cost), share: m.w };
+      return { model: m.model, provider: m.provider, billing: m.billing, plan: m.plan, io: mio, calls: Math.round(calls * m.w), cost, cost_text: m.billing === 'local' ? 'local' : cost == null ? '—' : fmtUsd(cost), share: m.w };
     });
   }
   /* previous contract (?legacy=1): without billing, plan, api_spend or codex, to check that nothing breaks */
@@ -1349,7 +1349,7 @@ function renderModels(box, list, countEl) {
     const ct = $('.m-cost', row);
     const costTxt = m.cost_text || (isNum(m.cost) ? fmtUsd(m.cost) : '—');
     setText(ct, costTxt); ct.classList.toggle('na', !isNum(m.cost));
-    ct.title = isNum(m.cost) ? 'API equivalent' : 'No known price for this model';
+    ct.title = m.billing === 'local' ? 'Local model: no cost' : isNum(m.cost) ? 'API equivalent' : 'No known price for this model';
     setText($('.m-io', row), fmtInt(m.io) + ' tokens');
     setText($('.m-calls', row), fmtInt(m.calls) + (m.calls === 1 ? ' call' : ' calls'));
     setText($('.m-share', row), isNum(m.share) ? (m.share * 100).toFixed(1) + '%' : '—');

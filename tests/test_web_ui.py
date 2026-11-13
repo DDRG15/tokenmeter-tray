@@ -141,3 +141,15 @@ def test_api_amount_is_labelled_as_an_estimate_not_a_payment(web_page):
     assert page.text_content("#sp-h-api .sp-t").strip() == "API equivalent · billed via API"
     assert "Paid via API" not in page.content()
     assert errors == []
+
+
+def test_a_local_model_row_reads_local_instead_of_a_price(web_page):
+    page, app, errors = web_page
+    app.store.add_event(UsageEvent(ts=time.time() - 90, provider="ollama", model="llama3.2",
+                                   input_tokens=2_000, output_tokens=100, source="proxy",
+                                   dedupe_key="req:local-1", billing="local"))
+    row = page.locator(".mrow", has_text="llama3.2")
+    row.wait_for(timeout=15_000)
+    assert row.locator(".m-cost").inner_text() == "local"
+    assert row.locator(".m-cost").get_attribute("title") == "Local model: no cost"
+    assert errors == []

@@ -59,8 +59,77 @@ def test_proxy_requests():
 
 def test_a_local_gateway_with_a_key_is_api_not_local():
     """LiteLLM on localhost forwards to a paid API: "local, no cost" would be false."""
-    assert classify_request({"Authorization": "Bearer sk-litellm-x"},
+    assert classify_request({"Authorization": "Bearer sk-litellm-0123456789abcdefghij"},
                             "http://127.0.0.1:4000") == ("api", "")
+
+
+DUMMY_KEYS = ["ollama", "sk-local", "lm-studio", "not-needed", "sk-no-key-required", "EMPTY",
+              "dummy", "token-abc123"]
+
+
+@pytest.mark.parametrize("key", DUMMY_KEYS)
+@pytest.mark.parametrize("upstream", ["http://127.0.0.1:11434", "http://localhost:1234", "http://[::1]:8080"])
+def test_a_dummy_key_to_a_local_upstream_is_local(key, upstream):
+    """Clients whose SDK insists on a key send one: it must not turn local usage into paid API."""
+    assert classify_request({"Authorization": f"Bearer {key}"}, upstream) == ("local", "")
+    assert classify_request({"x-api-key": key}, upstream) == ("local", "")
+    assert classify_request({"api-key": key}, upstream) == ("local", "")
+    assert classify_request({}, upstream, {"key": key}) == ("local", "")
+
+
+def test_a_listed_placeholder_is_local_even_when_it_is_long_enough_to_pass_for_a_key():
+    value = "sk-your-api-key-here"
+    assert len(value) >= 20
+    assert classify_request({"Authorization": f"Bearer {value.upper()}"}, "http://127.0.0.1:11434") == ("local", "")
+
+
+@pytest.mark.parametrize("key", [
+    "sk-litellm-0123456789abcdefghij",            # gateway virtual key
+    "sk-ant-api03-" + "a" * 90,                   # Anthropic
+    "sk-proj-" + "b" * 60,                        # OpenAI
+    "gsk_" + "c" * 52,                            # Groq
+    "x" * 20,                                     # unknown shape, long enough to be a key
+    "sk-ant-api03-secret",                        # short, but carries a vendor prefix
+])
+def test_a_real_looking_key_to_a_local_gateway_stays_api(key):
+    """LiteLLM on localhost forwards to a paid API: a real key keeps counting as money."""
+    assert classify_request({"Authorization": f"Bearer {key}"}, "http://127.0.0.1:4000") == ("api", "")
+    assert classify_request({"x-api-key": key}, "http://localhost:4000") == ("api", "")
+
+
+def test_a_real_key_anywhere_in_the_request_wins_over_a_dummy_one():
+    headers = {"x-api-key": "ollama", "Authorization": "Bearer sk-ant-api03-" + "a" * 90}
+    assert classify_request(headers, "http://127.0.0.1:4000") == ("api", "")
+    assert classify_request({"x-api-key": "ollama"}, "http://127.0.0.1:4000",
+                            {"key": "AIza" + "d" * 35}) == ("api", "")
+
+
+def test_a_subscription_credential_is_never_taken_for_a_placeholder():
+    assert classify_request({"Authorization": "Bearer sk-ant-oat01-a"},
+                            "http://127.0.0.1:4000") == ("subscription", "")
+    assert classify_request({"Authorization": "Bearer eyJ.e30.x"},
+                            "http://127.0.0.1:4000") == ("subscription", "")
+
+
+@pytest.mark.parametrize("key", [*DUMMY_KEYS, "x"])
+def test_a_dummy_key_to_a_remote_upstream_is_classified_as_before(key):
+    """Only a local destination makes a placeholder harmless."""
+    assert classify_request({"Authorization": f"Bearer {key}"}, "https://api.openai.com") == ("api", "")
+    assert classify_request({"x-api-key": key}, "https://api.anthropic.com") == ("api", "")
+    assert classify_request({}, "https://generativelanguage.googleapis.com", {"key": key}) == ("api", "")
+
+
+def test_a_blank_credential_to_a_remote_upstream_stays_unknown():
+    assert classify_request({"x-api-key": "  "}, "https://api.openai.com") == UNKNOWN
+
+
+def test_the_proxy_records_a_dummy_key_to_a_local_upstream_as_local(proxy):  # noqa: F811
+    collector, store = proxy
+    post(collector, "/anthropic/v1/messages", headers={"Authorization": "Bearer ollama"})
+    deadline = time.time() + 15
+    while time.time() < deadline and not stored_billing(store):
+        time.sleep(0.05)
+    assert [tuple(r) for r in stored_billing(store)] == [("local", "")]
 
 
 # -- Claude Code authentication on disk --------------------------------------------------
@@ -230,6 +299,85 @@ def test_api_without_a_price_does_not_invent_money(tmp_path):
     with_billing(app, 1_000, "a", "api", model="model-without-price")
     spend = dashboard.build_state(app)["cost"]["api_spend"]
     assert spend["value"] is None and spend["text"] == "—"
+
+
+def local_call(app, io, key, model="llama3.2"):
+    app.store.add_event(UsageEvent(ts=time.time() - 60, provider="ollama", model=model,
+                                   input_tokens=io, output_tokens=0, source="proxy",
+                                   dedupe_key=key, billing="local"))
+
+
+def test_local_usage_is_an_exact_zero_and_never_partial(tmp_path):
+    """A local model has no price, but it also costs nothing: the total stays exact."""
+    app = app_without_tk(tmp_path)
+    with_billing(app, 200_000, "a", "api")
+    local_call(app, 5_000, "b")
+    state = dashboard.build_state(app)
+
+    assert state["cost"]["partial"] is False
+    assert state["cost"]["text"] == "$1.00"  # not "$1.00 (partial)"
+    assert state["cost"]["api_spend"]["value"] == pytest.approx(1.0)
+    assert state["cost"]["api_spend"]["partial"] is False
+    (local,) = [b for b in state["billing"] if b["kind"] == "local"]
+    assert local["cost"] == 0.0 and local["cost_text"] == "$0.00"
+    (row,) = [m for m in state["models"] if m["billing"] == "local"]
+    assert row["cost"] == 0.0 and row["cost_text"] == "local"
+
+
+def test_only_local_usage_totals_a_certain_zero(tmp_path):
+    app = app_without_tk(tmp_path)
+    local_call(app, 5_000, "a")
+    cost = dashboard.build_state(app)["cost"]
+    assert (cost["value"], cost["text"], cost["partial"]) == (0.0, "$0.00", False)
+    assert cost["api_spend"]["value"] == 0.0 and cost["api_spend"]["partial"] is False
+
+
+def test_a_local_model_is_not_priced_like_the_paid_model_it_is_named_after(tmp_path):
+    """A local copy served under a paid name has no API equivalent."""
+    app = app_without_tk(tmp_path)
+    local_call(app, 1_000_000, "a", model="claude-opus-5")
+    state = dashboard.build_state(app)
+    assert state["cost"]["value"] == 0.0
+    assert state["models"][0]["cost"] == 0.0
+
+
+def test_an_unpriced_paid_model_still_marks_the_total_partial_next_to_local_usage(tmp_path):
+    app = app_without_tk(tmp_path)
+    with_billing(app, 1_000, "a", "api", model="model-without-price")
+    local_call(app, 5_000, "b")
+    state = dashboard.build_state(app)
+    # The missing price is the paid model's, not the local one's.
+    assert state["cost"]["partial"] is True and state["cost"]["value"] is None
+    (local,) = [b for b in state["billing"] if b["kind"] == "local"]
+    assert local["cost"] == 0.0
+
+
+def test_history_and_mcp_share_the_same_local_rule(tmp_path):
+    """The history tab, the Tk window and the MCP summary price rows with the same functions."""
+    from tokenmeter import usage_query
+    from tokenmeter.models import BILLING_LOCAL
+
+    assert usage_query._models is dashboard._models  # noqa: SLF001
+    app = app_without_tk(tmp_path)
+    with_billing(app, 200_000, "a", "api")
+    local_call(app, 5_000, "b")
+    history = dashboard.build_history(app, 7)
+    assert history["cost"]["partial"] is False and history["cost"]["text"] == "$1.00"
+    # A local zero is exact: never a missing price and never a minimum.
+    (local_row,) = [r for r, c, floor in dashboard.priced_models(app.store.totals_by_model_day(0))
+                    if r.billing == BILLING_LOCAL and c == 0.0 and floor is False]
+    assert local_row.model == "llama3.2"
+
+
+def test_the_linux_model_line_says_local_instead_of_an_api_equivalent():
+    from tokenmeter.ui.linux import model_line
+
+    local = {"provider": "ollama", "model": "llama3.2", "io": 5_000, "billing": "local", "plan": "",
+             "cost_text": "local"}
+    paid = {"provider": "groq", "model": "m", "io": 10, "billing": "api", "plan": "", "cost_text": "$1.00"}
+    assert model_line(local, True) == "ollama · llama3.2 (Local): 5,000 tokens · local, no cost"
+    assert model_line(paid, True) == "groq · m (Paid API): 10 tokens · $1.00 API equivalent"
+    assert model_line(local, False) == "ollama · llama3.2 (Local): 5,000 tokens"
 
 
 # -- Codex limits -------------------------------------------------------------------------------

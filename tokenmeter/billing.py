@@ -38,6 +38,21 @@ UNKNOWN: Billing = (BILLING_UNKNOWN, "")
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
 
+# Unrecognized credentials at least this long count as API evidence. Shorter
+# values are ambiguous unless they are known placeholders or have a vendor prefix.
+MIN_REAL_KEY_LENGTH = 20
+# Prefixes issued by the providers in `DEFAULT_UPSTREAMS` and their neighbours.
+# A value that starts with one is a key, not a placeholder.
+VENDOR_KEY_PREFIXES = ("sk-ant-", "sk-proj-", "sk-svcacct-", "sk-admin-", "sk-or-",
+                       "gsk_", "aiza", "xai-")
+# Only these well-known dummy values count as placeholders (case-insensitive).
+PLACEHOLDER_CREDENTIALS = frozenset({
+    "ollama", "lm-studio", "lmstudio", "local", "sk-local", "not-needed",
+    "no-key", "no-key-required", "sk-no-key-required", "none", "null", "empty",
+    "dummy", "sk-dummy", "api-key", "your-api-key", "your-api-key-here",
+    "sk-your-api-key-here", "sk-xxx", "token-abc123",
+})
+
 
 def classify_credential(value: str) -> str:
     """Billing type according to the shape of a credential (without the "Bearer")."""
@@ -52,25 +67,57 @@ def classify_credential(value: str) -> str:
     return BILLING_API
 
 
-def classify_request(headers: dict, upstream_url: str, query: dict | None = None) -> Billing:
-    """Classifies a proxy request. `headers` and `query` do not leave this function.
+def is_placeholder_credential(value: str) -> bool:
+    """True only for a known dummy credential, never merely because it is short.
 
-    The credential takes precedence over the destination: a gateway on localhost
-    (LiteLLM, for example) forwards to a paid API with a key, and marking it
-    "local, no cost" would be a believable and false number. Only a request
-    **without** a credential to a local upstream counts as an own model (Ollama).
+    A local gateway may forward paid requests using a short real secret.
+    Unrecognized short values therefore need unknown billing, while known
+    placeholders remain useful for clients whose SDK requires a key.
+    """
+    return value.strip().lower() in PLACEHOLDER_CREDENTIALS
+
+
+def classify_request(headers: dict, upstream_url: str, query: dict | None = None) -> Billing:
+    """Classify credentials without storing them or guessing a gateway is free.
+
+    Local destinations without credentials or with only known placeholders are
+    local. A provider prefix or an unrecognized credential of at least 20
+    characters is API evidence; subscription credentials keep their own type.
+    Other local credentials are ambiguous and stay unknown, so the existing
+    per-provider override can explicitly resolve them.
+
+    Credentials against remote destinations retain their existing classification.
     """
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    credentials: list[str] = []  # in order of precedence
     for name in ("x-api-key", "x-goog-api-key", "api-key"):
         if lowered.get(name):
-            return (classify_credential(lowered[name]), "")
+            credentials.append(lowered[name])
     auth = lowered.get("authorization", "")
     if auth.lower().startswith("bearer ") and auth[7:].strip():
-        return (classify_credential(auth[7:]), "")
-    if query and query.get("key"):  # Gemini accepts the key in the URL
+        credentials.append(auth[7:])
+    # Gemini also accepts the API key in the URL.
+    url_key = str(query["key"]) if query and query.get("key") else ""
+
+    is_local = (urlsplit(upstream_url).hostname or "") in LOCAL_HOSTS
+    offered = [*credentials, url_key] if url_key else credentials
+    if is_local:
+        supplied = [value.strip() for value in offered if value.strip()]
+        for value in supplied:
+            kind = classify_credential(value)
+            if kind == BILLING_SUBSCRIPTION:
+                return (kind, "")
+            if not is_placeholder_credential(value) and (
+                    len(value) >= MIN_REAL_KEY_LENGTH or value.lower().startswith(VENDOR_KEY_PREFIXES)):
+                return (BILLING_API, "")
+        if all(is_placeholder_credential(value) for value in supplied):
+            return (BILLING_LOCAL, "")
+        return UNKNOWN
+
+    if credentials:
+        return (classify_credential(credentials[0]), "")
+    if url_key:
         return (BILLING_API, "")
-    if (urlsplit(upstream_url).hostname or "") in LOCAL_HOSTS:
-        return (BILLING_LOCAL, "")
     return UNKNOWN
 
 
