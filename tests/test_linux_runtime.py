@@ -177,3 +177,15 @@ def test_native_shell_exits_with_all_resources_closed(tmp_path, scenario):
         assert result["visible"] and result["menu_active"]
         assert result["pause_verified"] and result["reopen_verified"]
         assert "Input 1,200" in result["summary"]
+
+
+def test_the_same_model_under_two_billing_types_reads_as_two_lines():
+    from tokenmeter.ui.linux import model_line
+
+    base = {"provider": "anthropic", "model": "claude-opus-5-5", "io": 1500, "cost_text": "$0.03"}
+    lines = [model_line({**base, "billing": "subscription", "plan": "max"}, show_cost=True),
+             model_line({**base, "billing": "api", "plan": ""}, show_cost=False)]
+    assert lines == [
+        "anthropic · claude-opus-5-5 (Subscription · Max): 1,500 tokens · $0.03 API equivalent",
+        "anthropic · claude-opus-5-5 (Paid API): 1,500 tokens",
+    ]

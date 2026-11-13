@@ -8,11 +8,20 @@ import signal
 import tempfile
 from pathlib import Path
 
+from ..billing import label as billing_label
 from ..config import data_dir
 from ..dashboard import build_state, build_history
 from ..runtime import Runtime
 
 log = logging.getLogger(__name__)
+
+
+def model_line(row: dict, show_cost: bool) -> str:
+    """One model of the breakdown. The billing type is part of the line because
+    the same model can appear twice, under a subscription and through an API key."""
+    line = (f"{row['provider']} · {row['model']} ({billing_label(row['billing'], row['plan'])}): "
+            f"{row['io']:,} tokens")
+    return line + (f" · {row['cost_text']} API equivalent" if show_cost else "")
 
 
 class LinuxShell:
@@ -223,9 +232,7 @@ class LinuxShell:
         lines.extend((state["sources"], state["warning"]))
         self.summary.set_text("\n".join(line for line in lines if line))
         self.models.set_text("\n".join(
-            f"{row['provider']} · {row['model']}: {row['io']:,} tokens" +
-            (f" · {row['cost_text']} API equivalent" if state["show_cost"] else "")
-            for row in state["models"]))
+            model_line(row, state["show_cost"]) for row in state["models"]))
         limits = []
         week = state["weekly"]
         if week["enabled"]:

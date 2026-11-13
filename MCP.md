@@ -41,6 +41,10 @@ says so in every response. Records stamped more than a minute in the future are
 excluded from summaries and from history. History days are local calendar days of the server process;
 `utc_offset_seconds` reports that offset.
 
+`totals.incomplete_calls` (and `incomplete_calls` on each history day) counts calls
+recorded without complete usage data, such as a stream that ended before its final
+usage report; the real tokens of those calls are higher than shown.
+
 A usage record whose timestamp is missing or unparseable is never counted: the
 server does not guess a date for it. Each source reports how many such records
 it skipped in `events_undated` (under `collectors` in every tool response); a
@@ -62,8 +66,10 @@ characters); any other value becomes `unrecognized`. Codex limit fields are
 returned only as finite numbers; anything else becomes `null`. A Codex window
 whose reset time has passed is marked `expired: true` and its `used_percent` is
 `null`, because it no longer describes current usage. When some calls have
-unknown billing, both the API spend and the subscription equivalent are partial,
-never a certain zero.
+unknown billing, both `api_spend` and `subscription_equivalent` are partial,
+never a certain zero. `api_spend` is the rate-based estimate for the calls billed
+via API; like every other amount here, it is calculated from published rates and
+is not a recorded charge.
 Read errors appear as source status, without echoing private exception contents.
 
 ## Standalone environment
