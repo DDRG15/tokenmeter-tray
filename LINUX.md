@@ -11,6 +11,8 @@ claimed as tested.
 Distribution Python 3.12 with venv, PyGObject, GTK 3 and the Ayatana AppIndicator 3
 typelib must already be available. On Mint/Ubuntu these are provided by
 python3-venv, python3-gi, gir1.2-gtk-3.0 and gir1.2-ayatanaappindicator3-0.1.
+`python3-gi-cairo` is recommended: with it the History chart shows each day split by
+model; without it the chart falls back to one plain bar per day.
 The installer checks them and never installs system packages automatically.
 
 ## User installation
@@ -64,11 +66,20 @@ validates first, retains a previous backup, closes collectors and exits afterwar
 
 ## Interface
 
+The window opens collapsed: the Claude session and week, the current month and a
+data-quality line that names anything that makes those figures less than exact.
+**Details** expands it and the choice is remembered; closing the window still quits.
+
 Overview shows Claude session/weekly usage, provider/model tokens with each
 model's billing type, API-equivalent estimates and Codex's recorded limits. Percentages keep their own plan scope.
-History provides filters, a chart and 7/30/90-day table. Unknown days are marked
+History provides filters, a chart of each day split by model (the five largest and "Others",
+with a legend and a tooltip per day) and a 7/30/90-day table. Unknown days are marked
 as unknown, not zero. CSV/JSON exports use the selected filters and protect app
-files. Settings provides manual budget, calibration from claude.ai, weekly reset,
+files. Budgets lists your personal limits with what each one has used in its
+current day, week or month; an amount that may be missing something is shown as
+a minimum with its reason. Sessions lists past sessions and whether each window
+was reported by Claude Code, copied from claude.ai or estimated. Calls lists the latest calls one page at a time, each with its
+tokens, billing type and exact API equivalent. Settings provides backups, the API-equivalent switch, manual budget, calibration from claude.ai, weekly reset,
 cache basis, alerts and session reset without deleting history. Notifications
 use an existing desktop notification service and are recalled on exit.
 

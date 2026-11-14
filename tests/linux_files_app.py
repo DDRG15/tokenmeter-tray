@@ -73,7 +73,16 @@ def main():
             result["filtered_calls"] = ui.history_data["summary"]["calls"]
             result["filtered_tokens"] = ui.history_data["summary"]["total"]
             result["rows"] = len(ui.history_store)
-            result["chart_ready"] = len(ui.chart_bars) == 7 and ui.chart_bars[-1].get_fraction() == 1
+            result["chart_mode"] = ui.chart_mode
+            if ui.chart_mode == "stack":
+                # Seven days, today's the tallest, split into the one model the
+                # source filter leaves; the legend names it.
+                today = ui.stack["days"][-1]
+                result["chart_ready"] = (len(ui.stack["days"]) == 7 and today["total"] == 70
+                    and [s["name"] for s in ui.stack["series"]] == ["openai · synthetic-openai"]
+                    and "openai · synthetic-openai" in ui.chart_legend.get_text())
+            else:
+                result["chart_ready"] = len(ui.chart_bars) == 7 and ui.chart_bars[-1].get_fraction() == 1
             result["unknown_calls_hidden"] = all(row[2] == "—" for row in ui.history_store if row[1] == "No record")
             result["codex_limits_visible"] = ("Codex synthetic" in ui.limits.get_text()
                 and "session: 25%" in ui.limits.get_text() and "week: 5%" in ui.limits.get_text())
