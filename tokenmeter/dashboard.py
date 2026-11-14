@@ -303,6 +303,38 @@ def build_codex(store, cfg, now: float) -> dict | None:
     }
 
 
+SESSION_HISTORY_LIMIT = 40
+
+
+def build_sessions(app, now: float | None = None, limit: int = SESSION_HISTORY_LIMIT) -> list[dict]:
+    """The latest sessions, newest first, as plain data for a table.
+
+    The percentage is against today's session budget: a past session has no
+    budget of its own stored, and showing none would hide which ones ran hot.
+    """
+    now = time.time() if now is None else now
+    budget = max(1, app.config.session_budget_tokens)
+    rows = []
+    for record in reversed(app.session.history(now, limit)):
+        begin, end = datetime.fromtimestamp(record.start_ts), datetime.fromtimestamp(record.end_ts)
+        rows.append({
+            "start_ts": record.start_ts,
+            "end_ts": record.end_ts,
+            "start_text": f"{DAYS[begin.weekday()]} {begin.strftime('%d/%m %H:%M')}",
+            "end_text": end.strftime("%H:%M"),
+            "active": record.active,
+            "calls": record.totals.calls,
+            "used": record.used_tokens,
+            "input": record.totals.input_tokens,
+            "output": record.totals.output_tokens,
+            "incomplete_calls": record.totals.incomplete_calls,
+            "percent": 100.0 * record.used_tokens / budget,
+            "source": record.source,
+            "source_text": SESSION_SOURCE_SHORT[record.source],
+        })
+    return rows
+
+
 def build_state(app, now: float | None = None, provider: str = "", source: str = "") -> dict:
     now = time.time() if now is None else now
     cfg = app.config

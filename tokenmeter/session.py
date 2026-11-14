@@ -80,6 +80,18 @@ class Snapshot:
         return when.strftime("%d/%m %H:%M:%S")
 
 
+@dataclass(frozen=True)
+class SessionRecord:
+    """One past or current session: a window and the calls that fell in it."""
+
+    start_ts: float
+    end_ts: float
+    totals: Totals
+    used_tokens: int
+    source: str   # SOURCE_CLAUDE_CODE, SOURCE_CLAUDE_AI or SOURCE_ESTIMATED
+    active: bool  # still open at the instant the history was built
+
+
 class SessionTracker:
     def __init__(self, store: Store, config: Config) -> None:
         self._store = store
@@ -177,6 +189,69 @@ class SessionTracker:
             # The last session expired and there has been nothing since.
             return (now, False)
         return (start, True)
+
+    # -- history ------------------------------------------------------------
+
+    def history(self, now: float | None = None, limit: int | None = None) -> list[SessionRecord]:
+        """Every session the stored calls belong to, oldest first.
+
+        A session reset does not lose anything: each call belongs to exactly one
+        session, the one whose window contains it. The walk is the same one
+        `anchor` does, kept whole instead of reduced to its last window, so the
+        last record is the current session whenever one is open.
+
+        Two instants cut the timeline, and a session never runs across one:
+        a manual reset (the next session starts with the next call) and the
+        latest window the account reported (a session starts exactly there).
+        Older windows are estimated from the first call after the previous one
+        ended; they were not reported by anyone and say so.
+        """
+        now = time.time() if now is None else now
+        window = self._config.window_seconds
+        manual = self.manual_reset_ts()
+        known, known_source = self.known_start()
+        if known is not None and not manual <= known <= now:
+            known = None  # same condition `anchor` applies
+
+        stamps = [ts for ts in self._store.event_timestamps_since(0.0, self._config.percent_scope)
+                  if ts <= now]
+        cuts = sorted({c for c in (manual, known) if c is not None and c > 0})
+        windows: list[tuple[float, float, str]] = []  # (start, end, source)
+        start: float | None = None
+        source = SOURCE_ESTIMATED
+        pending = list(cuts)
+
+        def close(limit_ts: float) -> None:
+            if start is not None:
+                windows.append((start, min(start + window, limit_ts), source))
+
+        for ts in [*stamps, None]:
+            # Apply every cut that lies at or before this call (or all the
+            # remaining ones once the calls are exhausted).
+            while pending and (ts is None or pending[0] <= ts):
+                cut = pending.pop(0)
+                close(cut)
+                if cut == known:
+                    start, source = cut, known_source
+                else:
+                    start = None
+            if ts is None:
+                break
+            if start is None or ts >= start + window:
+                close(float("inf"))
+                start, source = ts, SOURCE_ESTIMATED
+        close(float("inf"))
+
+        if limit is not None:
+            windows = windows[-limit:] if limit > 0 else []
+        basis = self._config.percent_basis
+        records = []
+        for begin, end, origin in windows:
+            totals = self._store.totals_between(begin, end, self._config.percent_scope, now)
+            records.append(SessionRecord(
+                start_ts=begin, end_ts=end, totals=totals, used_tokens=totals.basis(basis),
+                source=origin, active=begin <= now < end))
+        return records
 
     # -- read for the UI ------------------------------------------------
 
