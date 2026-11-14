@@ -59,6 +59,7 @@ def source_files(root=ROOT):
         'tokenmeter/pricing.py',
         'tokenmeter/runtime.py',
         'tokenmeter/session.py',
+        'tokenmeter/stackchart.py',
         'tokenmeter/state.py',
         'tokenmeter/store.py',
         'tokenmeter/ui/__init__.py',

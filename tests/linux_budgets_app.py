@@ -79,6 +79,24 @@ def main():
 
             def drive():
                 try:
+                    # The window opens collapsed: the summary and its button only.
+                    result["collapsed_at_start"] = not ui.details.get_visible()
+                    result["collapsed_height"] = ui.window.get_size()[1]
+                    result["compact"] = ui.compact.get_text()
+                    result["button_collapsed"] = ui.details_button.get_label()
+                    ui.details_button.clicked()
+                    # The resize is applied by the display server, not at once.
+                    deadline = time.monotonic() + 3
+                    while (ui.window.get_size()[1] <= result["collapsed_height"]
+                           and time.monotonic() < deadline):
+                        ui.Gtk.main_iteration_do(False)
+                        time.sleep(0.01)
+                    result["expanded"] = ui.details.get_visible() and ui.tabs.get_visible()
+                    result["expanded_height"] = ui.window.get_size()[1]
+                    result["button_expanded"] = ui.details_button.get_label()
+                    result["remembered"] = runtime.store.get_state("ui_details_expanded")
+                    result["still_running"] = not ui._closed
+
                     ui.tabs.set_current_page(2)
                     result["empty_note"] = ui.budget_note.get_text()
                     result["defaults"] = None
@@ -132,6 +150,19 @@ def main():
                     # The sessions tab lists the synthetic session.
                     ui.tabs.set_current_page(3)
                     result["sessions"] = [tuple(row) for row in ui.session_store]
+
+                    # The calls tab lists both synthetic calls, newest first, and
+                    # follows the provider filter.
+                    ui.tabs.set_current_page(4)
+                    result["calls"] = [tuple(row) for row in ui.call_store]
+                    result["calls_note"] = ui.calls_note.get_text()
+                    result["more_enabled"] = ui.calls_more_button.get_sensitive()
+                    ui.provider_filter.set_active_id("openai")
+                    result["calls_openai"] = [row[1] for row in ui.call_store]
+                    ui.cost_toggle.set_active(False)
+                    result["calls_cost_hidden"] = [row[6] for row in ui.call_store]
+                    ui.cost_toggle.set_active(True)
+                    ui.provider_filter.set_active_id("")
 
                     # Delete asks first; "No" keeps it, "Yes" removes it.
                     ui.tabs.set_current_page(2)

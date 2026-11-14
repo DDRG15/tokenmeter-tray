@@ -27,7 +27,8 @@ from pathlib import Path
 
 from aiohttp import web
 
-from ..dashboard import ALLOWED_ACTIONS, build_history, build_state
+from .. import budgets
+from ..dashboard import ALLOWED_ACTIONS, build_budgets, build_history, build_state
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,10 @@ class DashboardServer:
         app.router.add_get("/api/history", self._history)
         app.router.add_get("/api/export", self._export)
         app.router.add_post("/api/action", self._action)
+        app.router.add_get("/api/budgets", self._budgets)
+        app.router.add_post("/api/budgets", self._budget_save)
+        app.router.add_post("/api/budgets/toggle", self._budget_toggle)
+        app.router.add_post("/api/budgets/delete", self._budget_delete)
 
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
@@ -188,6 +193,70 @@ class DashboardServer:
             self._app.enqueue({"action": action, "days": days, "provider": provider, "source": source})
         else:
             self._app.enqueue(action)
+        return web.json_response({"ok": True}, headers=NO_STORE)
+
+    # -- personal budgets ---------------------------------------------------
+    # These answer directly instead of going through the action queue: the page
+    # needs to know why a form was refused, and the store is safe to use from
+    # this thread.
+
+    async def _budgets(self, _request: web.Request) -> web.Response:
+        data = build_budgets(self._app)
+        stored = {b.id: b for b in budgets.load_budgets(self._app.store)[0]}
+        for item in data["budgets"]:
+            # What the editor shows when this budget is opened.
+            item["form"] = budgets.form_from_budget(stored[item["id"]])
+        data["defaults"] = budgets.form_from_budget()
+        return self._json(data)
+
+    @staticmethod
+    async def _body(request: web.Request) -> dict | None:
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        return body if isinstance(body, dict) else None
+
+    def _stored_budget(self, budget_id: object):
+        if not isinstance(budget_id, str):
+            return None
+        return next((b for b in budgets.load_budgets(self._app.store)[0] if b.id == budget_id), None)
+
+    async def _budget_save(self, request: web.Request) -> web.Response:
+        body = await self._body(request)
+        form = body.get("form") if body else None
+        if (not isinstance(form, dict) or set(form) - set(budgets.FORM_FIELDS)
+                or not all(isinstance(v, str) and len(v) <= 200 for v in form.values())):
+            return web.json_response({"ok": False, "error": "The form is not valid."}, status=400)
+        existing = None
+        if body.get("id") is not None:
+            existing = self._stored_budget(body["id"])
+            if existing is None:
+                return web.json_response({"ok": False, "error": "That budget no longer exists."},
+                                         status=404)
+        try:
+            budget = budgets.budget_from_form(form, existing)
+        except ValueError as exc:
+            # The message is written for the user; it names no file or value
+            # the page did not send.
+            return web.json_response({"ok": False, "error": str(exc)}, status=400, headers=NO_STORE)
+        budgets.save_budget(self._app.store, budget)
+        return web.json_response({"ok": True, "id": budget.id}, headers=NO_STORE)
+
+    async def _budget_toggle(self, request: web.Request) -> web.Response:
+        body = await self._body(request)
+        current = self._stored_budget(body.get("id")) if body else None
+        if current is None:
+            return web.json_response({"ok": False, "error": "That budget no longer exists."}, status=404)
+        budgets.save_budget(self._app.store, budgets.set_enabled(current, not current.enabled))
+        return web.json_response({"ok": True, "enabled": not current.enabled}, headers=NO_STORE)
+
+    async def _budget_delete(self, request: web.Request) -> web.Response:
+        body = await self._body(request)
+        current = self._stored_budget(body.get("id")) if body else None
+        if current is None:
+            return web.json_response({"ok": False, "error": "That budget no longer exists."}, status=404)
+        self._app.store.delete_budget(current.id)
         return web.json_response({"ok": True}, headers=NO_STORE)
 
     @staticmethod
