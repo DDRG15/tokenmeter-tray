@@ -518,6 +518,15 @@ type after each model name. The same model used under a subscription and through
 an API key appears as two rows. The credential is inspected and discarded: it is
 never stored.
 
+A Claude Code transcript does not say how each call was paid, so its calls take
+the Claude Code login in force **when the call was made**: TokenMeter notes each
+login change with the time it saw it. A call made under your plan and read after
+you switched to an API key stays under the plan. A call that falls between the
+last time one login was seen and the first time the next one was (the app was
+closed while you switched) shows **Billing?**, because either could have paid.
+Calls older than the first login seen take that first one. Only changes seen
+while the app runs are known.
+
 Local usage costs nothing: it counts as an exact $0 in the money totals (they are
 not marked partial because of it), its models show `local` instead of a price, and
 it is never priced as if it had an API equivalent.

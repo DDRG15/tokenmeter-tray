@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import official_limits
-from ..billing import CachedBilling, apply_override
+from ..billing import AuthTimeline, CachedBilling, apply_override
 from ..models import UsageEvent
 from ..store import Store
 from .base import MAX_COUNT, Collector, bounded_count  # noqa: F401 - MAX_COUNT stays importable from here
@@ -162,6 +162,9 @@ class TranscriptCollector(Collector):
         # The lines do not say how the call was paid: Claude Code's
         # authentication on disk is used. `billing` is injectable for tests.
         self._billing = billing or CachedBilling()
+        # Each call is tagged with the login in force at its own time, not with
+        # the one on disk when its line happens to be read.
+        self._timeline = AuthTimeline(store, self._billing)
         self._overrides = overrides
         self._retagged = False
         self._covered_until: float | None = None
@@ -185,6 +188,12 @@ class TranscriptCollector(Collector):
             return 0
         if not self._retagged:
             self._retag_unknown()
+        # On every scan, also the ones that find nothing new: a quiet hour with
+        # the app open must not look like an hour nobody was watching the login.
+        try:
+            self._timeline.observe()
+        except Exception:
+            log.debug("could not record the login in force", exc_info=True)
         added = 0
         files = 0
         oldest = None
@@ -294,8 +303,11 @@ class TranscriptCollector(Collector):
                 batch.append(event)
 
         if batch:
-            kind, plan = apply_override("anthropic", self._billing.get(), self._overrides)
-            batch = [replace(e, billing=kind, plan=plan) for e in batch]
+            tagged = []
+            for event in batch:
+                kind, plan = apply_override("anthropic", self._timeline.at(event.ts), self._overrides)
+                tagged.append(replace(event, billing=kind, plan=plan))
+            batch = tagged
 
         # A single commit per file, not one per event.
         added = self._store.add_events(batch)
