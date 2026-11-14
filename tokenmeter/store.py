@@ -214,6 +214,35 @@ class Store:
         store._conn.execute("PRAGMA temp_store=MEMORY")
         return store
 
+    @classmethod
+    def open_read_only(cls, db_path: Path, retain_days: int | None = None):
+        """Opens an existing database to read it, never to change it.
+
+        For a second process (the MCP server) looking at the desktop app's
+        database. Nothing is created, migrated or pruned: the constructor does
+        all three. SQLite itself may create or update the `-shm` and an empty
+        `-wal` next to the file, as any reader of a WAL database does; the data
+        is not touched. Raises `sqlite3.Error` if the file cannot be read.
+        """
+        store = cls.__new__(cls)
+        store._closed = False
+        store._floor_cache = None
+        store._retain_days = retain_days
+        store.path = Path(db_path)
+        store._lock = threading.RLock()
+        # `as_uri()` escapes spaces, `?` and `#` in the path. `mode=ro` and not
+        # `immutable=1`: the app may be writing right now.
+        store._conn = sqlite3.connect(store.path.resolve().as_uri() + "?mode=ro", uri=True,
+                                      check_same_thread=False, timeout=2.0)
+        store._conn.row_factory = sqlite3.Row
+        try:
+            store._conn.execute("PRAGMA query_only=ON")
+            store._conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        except sqlite3.Error:
+            store._conn.close()
+            raise
+        return store
+
     def __init__(self, db_path: Path, retain_days: int | None = None) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._closed = False
