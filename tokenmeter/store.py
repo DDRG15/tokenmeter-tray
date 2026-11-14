@@ -102,7 +102,41 @@ CREATE TABLE IF NOT EXISTS coverage (
     start REAL NOT NULL,
     end   REAL NOT NULL
 );
+
+-- Personal budgets. `limit_value` is an integer in the metric's own unit:
+-- tokens, or picodollars for money (see `pricing.PICO_PER_USD`).
+CREATE TABLE IF NOT EXISTS budgets (
+    id             TEXT    PRIMARY KEY,
+    name           TEXT    NOT NULL,
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    metric         TEXT    NOT NULL,
+    token_basis    TEXT    NOT NULL DEFAULT 'all',
+    scope_kind     TEXT    NOT NULL DEFAULT 'all',
+    scope_provider TEXT    NOT NULL DEFAULT '',
+    scope_model    TEXT    NOT NULL DEFAULT '',
+    period         TEXT    NOT NULL,
+    timezone       TEXT    NOT NULL DEFAULT '',
+    limit_value    INTEGER NOT NULL,
+    thresholds     TEXT    NOT NULL DEFAULT '[]',
+    created_ts     REAL    NOT NULL,
+    updated_ts     REAL    NOT NULL
+);
+
+-- One row per threshold already announced for a budget in a period. The
+-- primary key is the whole point: a threshold is reserved here before the
+-- notification is shown, so a restart or a second window cannot repeat it.
+CREATE TABLE IF NOT EXISTS budget_notifications (
+    budget_id    TEXT    NOT NULL,
+    period_start REAL    NOT NULL,
+    threshold    INTEGER NOT NULL,
+    reserved_ts  REAL    NOT NULL,
+    PRIMARY KEY (budget_id, period_start, threshold)
+);
 """
+
+BUDGET_COLUMNS = ("id", "name", "enabled", "metric", "token_basis", "scope_kind",
+                  "scope_provider", "scope_model", "period", "timezone", "limit_value",
+                  "thresholds", "created_ts", "updated_ts")
 
 
 @dataclass(frozen=True)
@@ -394,6 +428,22 @@ class Store:
             ).fetchone()
         return Totals(**{k: int(row[k]) for k in row.keys()})
 
+    def totals_between(self, start_ts: float, end_ts: float, scope: str | None = None,
+                       as_of: float | None = None) -> Totals:
+        """Totals of the half-open interval [start, end).
+
+        A call stamped exactly at `end_ts` belongs to whatever starts there, so
+        two consecutive intervals never share a call. `as_of` is the instant of
+        the reading: a call stamped after it has not happened yet.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {self._AGG_COLS} FROM usage_events "
+                f"WHERE ts >= ? AND ts < ? AND ts <= ? AND {scope_sql(scope)}",
+                (start_ts, end_ts, _upper_bound(as_of)),
+            ).fetchone()
+        return Totals(**{k: int(row[k]) for k in row.keys()})
+
     def totals_by_model(self, since_ts: float, provider: str = "", source: str = "",
                         until_ts: float | None = None) -> list[ModelTotals]:
         until = _upper_bound(until_ts)
@@ -459,6 +509,45 @@ class Store:
             )
             for r in rows
         ]
+
+    def model_days_between(self, start_ts: float, end_ts: float, as_of: float, *,
+                           provider: str = "", model: str = "") -> list[ModelDayTotals]:
+        """Per-model, per-local-day totals of the half-open period [start, end).
+
+        A call stamped exactly at `end_ts` belongs to the next period, so two
+        consecutive periods never count the same call. `as_of` is the instant
+        of the evaluation: a call stamped after it has not happened yet, even
+        when its period is already open. `provider` and `model` are exact
+        matches; empty means any.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT model, provider, billing, plan,
+                           date(ts, 'unixepoch', 'localtime') AS day, {self._AGG_COLS}
+                    FROM usage_events WHERE ts >= ? AND ts < ? AND ts <= ?
+                      AND (?='' OR provider=?) AND (?='' OR model=?)
+                    GROUP BY model, provider, billing, plan, day
+                    ORDER BY day""",
+                (start_ts, end_ts, as_of, provider, provider, model, model),
+            ).fetchall()
+        return [
+            ModelDayTotals(
+                model=r["model"], provider=r["provider"], billing=r["billing"], plan=r["plan"],
+                day=r["day"],
+                **{k: int(r[k]) for k in Totals.__dataclass_fields__},
+            )
+            for r in rows
+        ]
+
+    def history_start(self, now: float | None = None) -> float:
+        """Oldest instant whose calls can still be in the database.
+
+        Anything before it was pruned by retention or discarded by a fresh
+        start, so a total that reaches further back is missing calls.
+        """
+        now = time.time() if now is None else now
+        retained = now - self._retain_days * 86400 if self._retain_days is not None else 0.0
+        return max(self.coverage_floor() or 0.0, retained)
 
     def daily_totals(self, since_ts: float, provider: str = "", source: str = "",
                      until_ts: float | None = None) -> dict[str, Totals]:
@@ -681,6 +770,68 @@ class Store:
             ).rowcount
             self._conn.commit()
         return n
+
+    # -- budgets ----------------------------------------------------------
+
+    def budget_rows(self) -> list[dict]:
+        """Stored budget definitions, oldest first. Validation is `budgets.py`'s job."""
+        with self._lock:
+            # By rowid: the order they were added in. `created_ts` cannot break
+            # a tie between two budgets added within one tick of a coarse clock.
+            return [dict(r) for r in self._conn.execute(
+                f"SELECT {','.join(BUDGET_COLUMNS)} FROM budgets ORDER BY rowid")]
+
+    def save_budget_row(self, row: dict) -> None:
+        """Inserts or replaces one definition. `created_ts` of an existing one is kept."""
+        now = time.time()
+        data = {**row, "updated_ts": now}
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT created_ts FROM budgets WHERE id=?", (data["id"],)).fetchone()
+            data["created_ts"] = existing["created_ts"] if existing else now
+            if existing:
+                # UPDATE, not INSERT OR REPLACE: a replaced row gets a new rowid
+                # and would jump to the end of the list on every edit.
+                changed = [c for c in BUDGET_COLUMNS if c != "id"]
+                self._conn.execute(
+                    f"UPDATE budgets SET {','.join(c + '=?' for c in changed)} WHERE id=?",
+                    (*[data[c] for c in changed], data["id"]))
+            else:
+                self._conn.execute(
+                    f"INSERT INTO budgets ({','.join(BUDGET_COLUMNS)}) "
+                    f"VALUES ({','.join('?' for _ in BUDGET_COLUMNS)})",
+                    tuple(data[c] for c in BUDGET_COLUMNS))
+            self._conn.commit()
+
+    def delete_budget(self, budget_id: str) -> bool:
+        with self._lock:
+            n = self._conn.execute("DELETE FROM budgets WHERE id=?", (budget_id,)).rowcount
+            self._conn.execute("DELETE FROM budget_notifications WHERE budget_id=?", (budget_id,))
+            self._conn.commit()
+        return bool(n)
+
+    def reserve_budget_thresholds(self, budget_id: str, period_start: float,
+                                  thresholds: "Iterable[int]") -> list[int]:
+        """Marks thresholds as announced; returns only the ones that were new.
+
+        Reserving and reporting happen in one transaction, so two callers that
+        cross the same threshold at once get it back exactly once between them.
+        """
+        new: list[int] = []
+        now = time.time()
+        with self._lock, self._conn:
+            for threshold in sorted(set(thresholds)):
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO budget_notifications"
+                    "(budget_id, period_start, threshold, reserved_ts) VALUES (?,?,?,?)",
+                    (budget_id, period_start, int(threshold), now))
+                if cur.rowcount:
+                    new.append(int(threshold))
+            # Reservations of periods that ended long ago can never match again.
+            self._conn.execute(
+                "DELETE FROM budget_notifications WHERE budget_id=? AND period_start < ?",
+                (budget_id, period_start - 400 * 86400))
+        return new
 
     # -- state ------------------------------------------------------------
 
