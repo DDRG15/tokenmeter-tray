@@ -393,6 +393,23 @@ button { font: inherit; color: inherit; }
 .sk-blk { background: linear-gradient(90deg, rgba(255,255,255,.04) 25%, rgba(255,255,255,.09) 50%, rgba(255,255,255,.04) 75%); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
+/* ---------- personal budgets ---------- */
+.bg-row { padding: 9px 0; border-top: 1px solid var(--stroke); }
+.bg-row:first-child { border-top: 0; padding-top: 0; }
+.bg-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.bg-name { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.bg-use { font-size: 12px; white-space: nowrap; }
+.bg-row .track { margin: 6px 0 5px; }
+.bg-detail, .bg-cause { font-size: 11.5px; color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
+.bg-cause { color: var(--warn-ink); }
+.bg-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.bg-form { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--stroke); display: grid; gap: 8px; }
+.bg-form label { font-size: 12px; color: var(--muted); display: block; }
+.bg-form input, .bg-form select { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; border-radius: 8px;
+  color: inherit; background: var(--bg,#11151d); border: 1px solid #394050; font: inherit; font-size: 12.5px; }
+.bg-form input:focus-visible, .bg-form select:focus-visible { outline: 2px solid var(--brand-b); outline-offset: 1px; }
+.bg-err { color: var(--danger-ink); font-size: 12px; min-height: 16px; }
+
 /* ---------- buttons, settings sheet ---------- */
 .btn {
   border: 1px solid var(--stroke-2); background: rgba(255,255,255,.06); color: var(--text); border-radius: 9px;
@@ -589,6 +606,32 @@ body.hide-cost .cost, body.hide-cost .m-cost, body.hide-cost .b-cost { display:n
           <div class="origin" id="wkOrigin"></div>
           <button class="btn small" id="wkCfg" hidden>Configure</button>
         </div>
+      </article>
+
+      <article class="card budgets" id="budgetCard" hidden>
+        <div class="card-head"><span class="eyebrow">Your budgets</span><button class="btn small" id="bgAdd" type="button">Add</button></div>
+        <div id="bgList"></div>
+        <p class="note" id="bgNote"></p>
+        <form class="bg-form" id="bgForm" hidden novalidate>
+          <label>Name<input id="bgName" maxlength="60" autocomplete="off"></label>
+          <label>Measure<select id="bgMetric">
+            <option value="money">API equivalent (USD)</option><option value="tokens">Tokens</option>
+            <option value="input">Input tokens</option><option value="output">Output tokens</option></select></label>
+          <label id="bgBasisWrap">Tokens counted<select id="bgBasis">
+            <option value="all">input + output + cache</option><option value="io">input + output</option></select></label>
+          <label>Period<select id="bgPeriod">
+            <option value="day">Day</option><option value="week">Week (Monday to Monday)</option>
+            <option value="month">Calendar month</option></select></label>
+          <label>Applies to<select id="bgScope">
+            <option value="all">All usage</option><option value="provider">One provider</option>
+            <option value="model">One model</option></select></label>
+          <label id="bgProviderWrap">Provider (as listed in the Provider filter)<input id="bgProvider" maxlength="100" autocomplete="off"></label>
+          <label id="bgModelWrap">Model (exact name)<input id="bgModel" maxlength="150" autocomplete="off"></label>
+          <label><span id="bgLimitLbl">Limit</span><input id="bgLimit" maxlength="30" autocomplete="off" inputmode="decimal"></label>
+          <label>Notify at these percentages (empty for none)<input id="bgMarks" maxlength="60" autocomplete="off"></label>
+          <div class="bg-err" id="bgErr" role="alert"></div>
+          <div class="bg-acts"><button class="btn primary" type="submit" id="bgSave">Save</button><button class="btn" type="button" id="bgCancel">Cancel</button></div>
+        </form>
       </article>
 
       <article class="card codex" id="codexCard" hidden>
@@ -1442,6 +1485,111 @@ async function pollState() {
   setTimeout(pollState, delay);
 }
 
+/* ================= personal budgets ================= */
+/* Limits the user sets on their own recorded usage. Names are typed by the
+   user, so everything is written with textContent, never as markup. */
+const BG = { data: null, editing: null, confirming: null };
+const BG_LEVEL = { below: 'ok', warning: 'warn', danger: 'danger', exceeded: 'danger' };
+const BG_MARK = { below: '', warning: '▲ ', danger: '▲▲ ', exceeded: '■ ' };
+
+async function bgSend(path, payload) {
+  /* Unlike api(): a refused form answers 400 with the reason, and the page shows it. */
+  const r = await fetch(path, { method: 'POST', cache: 'no-store', body: JSON.stringify(payload),
+    headers: { 'X-TM-Token': S.token, 'Content-Type': 'application/json' } });
+  let body = null;
+  try { body = await r.json(); } catch (e) { /* not JSON */ }
+  return body && typeof body === 'object' ? body : { ok: false, error: 'The app did not answer (HTTP ' + r.status + ').' };
+}
+
+function bgDiv(cls, text) { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; }
+function bgBtn(text, fn, cls) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small' + (cls ? ' ' + cls : ''); b.textContent = text; b.addEventListener('click', fn); return b; }
+
+function renderBudgets(data) {
+  BG.data = data;
+  const list = $('#bgList');
+  list.replaceChildren();
+  for (const b of data.budgets) {
+    const row = bgDiv('bg-row');
+    row.dataset.level = BG_LEVEL[b.state] || 'idle';
+    row.dataset.id = b.id;
+    const top = bgDiv('bg-top');
+    top.append(bgDiv('bg-name', b.name + (b.enabled ? '' : ' (notices off)')), bgDiv('bg-use', (BG_MARK[b.state] || '') + b.summary));
+    const track = bgDiv('track'); const fill = document.createElement('i');
+    fill.style.width = Math.max(0, Math.min(100, b.percent_min)) + '%'; track.append(fill);
+    track.title = b.uncertain ? 'At least this much of the limit is used' : 'Share of the limit used';
+    row.append(top, track, bgDiv('bg-detail', b.unit + ' · ' + b.scope + ' · this ' + b.period));
+    for (const line of b.cause_lines) row.append(bgDiv('bg-cause', 'Minimum: ' + line));
+    const acts = bgDiv('bg-acts');
+    acts.append(
+      bgBtn('Edit', () => bgOpen(b)),
+      bgBtn(b.enabled ? 'Turn notices off' : 'Turn notices on', async () => { await bgSend('/api/budgets/toggle', { id: b.id }); loadBudgets(); }),
+      BG.confirming === b.id
+        ? bgBtn('Confirm delete', async () => { BG.confirming = null; await bgSend('/api/budgets/delete', { id: b.id }); loadBudgets(); }, 'danger')
+        : bgBtn('Delete', () => { BG.confirming = b.id; renderBudgets(BG.data); }));
+    row.append(acts);
+    list.append(row);
+  }
+  const notes = [];
+  if (!data.budgets.length) notes.push('No budgets yet. Add one to be told when your own usage passes a limit. They are not the plan\u2019s quota, and the API equivalent is not an invoice.');
+  if (data.invalid) notes.push(data.invalid + ' stored budget(s) could not be read and are ignored.');
+  setText($('#bgNote'), notes.join(' '));
+  $('#budgetCard').hidden = false;
+}
+
+function bgSyncForm() {
+  const metric = $('#bgMetric').value, scope = $('#bgScope').value;
+  $('#bgBasisWrap').hidden = metric !== 'tokens';
+  $('#bgProviderWrap').hidden = scope === 'all';
+  $('#bgModelWrap').hidden = scope !== 'model';
+  setText($('#bgLimitLbl'), metric === 'money' ? 'Limit in dollars (for example 25 or 0.50)' : 'Limit in tokens (500k and 2M work)');
+}
+
+function bgOpen(budget) {
+  const f = budget ? budget.form : (BG.data && BG.data.defaults) || {};
+  BG.editing = budget ? budget.id : null;
+  $('#bgName').value = f.name || ''; $('#bgMetric').value = f.metric || 'money';
+  $('#bgBasis').value = f.token_basis || 'all'; $('#bgPeriod').value = f.period || 'month';
+  $('#bgScope').value = f.scope_kind || 'all'; $('#bgProvider').value = f.scope_provider || '';
+  $('#bgModel').value = f.scope_model || ''; $('#bgLimit').value = f.limit || '';
+  $('#bgMarks').value = f.thresholds == null ? '60, 85, 100' : f.thresholds;
+  setText($('#bgErr'), ''); setText($('#bgSave'), budget ? 'Save changes' : 'Add budget');
+  bgSyncForm();
+  $('#bgForm').hidden = false; $('#bgName').focus();
+}
+
+async function bgSubmit(ev) {
+  ev.preventDefault();
+  const form = { name: $('#bgName').value, metric: $('#bgMetric').value, token_basis: $('#bgBasis').value,
+    period: $('#bgPeriod').value, scope_kind: $('#bgScope').value, scope_provider: $('#bgProvider').value,
+    scope_model: $('#bgModel').value, limit: $('#bgLimit').value, thresholds: $('#bgMarks').value };
+  const payload = BG.editing ? { form, id: BG.editing } : { form };
+  let answer;
+  try { answer = await bgSend('/api/budgets', payload); } catch (e) { answer = { ok: false, error: 'The app did not answer.' }; }
+  if (!answer.ok) { setText($('#bgErr'), answer.error || 'That could not be saved.'); return; }
+  $('#bgForm').hidden = true; BG.editing = null;
+  loadBudgets();
+}
+
+async function loadBudgets() {
+  if (S.demo) return;
+  try {
+    const data = await api('/api/budgets');
+    if (data && Array.isArray(data.budgets)) renderBudgets(data);
+  } catch (e) { /* the state loop already reports a lost connection */ }
+}
+
+function initBudgets() {
+  if (S.demo) return;  /* the demo has no database to keep a budget in */
+  $('#bgAdd').addEventListener('click', () => bgOpen(null));
+  $('#bgCancel').addEventListener('click', () => { $('#bgForm').hidden = true; BG.editing = null; });
+  $('#bgForm').addEventListener('submit', bgSubmit);
+  $('#bgMetric').addEventListener('change', bgSyncForm);
+  $('#bgScope').addEventListener('change', bgSyncForm);
+  loadBudgets();
+  /* A budget adds up a day, a week or a month: refreshed at its own pace. */
+  setInterval(() => { if ($('#bgForm').hidden && !BG.confirming) loadBudgets(); }, 15000);
+}
+
 /* ================= history ================= */
 function buildRangeSeg(ranges) {
   const seg = $('#rangeSeg');
@@ -1740,6 +1888,7 @@ new ResizeObserver(() => {
 buildRangeSeg([7, 30, 90]);
 setTab(S.tab);
 pollState();
+initBudgets();
 if (S.demo && q.get('sheet') === '1') openSheet();
 if (S.demo && q.get('confirm') === '1') openConfirm();
 })();

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 
 # Date every block of the table below was last checked against its source.
 # Prices change; if this is very old, check each block at the URL named in the
@@ -210,6 +212,81 @@ def cost_usd(
         + write_1h * per_token_in * CACHE_WRITE_1H_MULTIPLIER
         + cache_read_tokens * per_token_in * price.cache_read_multiplier
     )
+
+
+# Budgets add money up, so they cannot use floats: a month of calls summed in
+# binary floating point drifts, and a threshold comparison on a drifting total
+# can fire one call early or late. One picodollar is 1e-12 USD. Every verified
+# rate (dollars per million tokens with up to six decimals, times a cache
+# multiplier) is a whole number of picodollars per token, so sums are exact.
+PICO_PER_USD = 10 ** 12
+MAX_TYPED_USD = 1_000_000_000
+
+
+def _pico_per_token(rate_per_mtok: float, multiplier: float = 1.0) -> Fraction:
+    # `str()` first: Fraction(0.1) is the binary neighbour of 0.1, not one tenth.
+    return Fraction(str(rate_per_mtok)) * Fraction(str(multiplier)) * (PICO_PER_USD // 1_000_000)
+
+
+def cost_pico(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_write_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_1h_tokens: int = 0,
+    on_date: str = "",
+) -> int | None:
+    """`cost_usd` as an exact integer number of picodollars, or None without a price.
+
+    Same rules as `cost_usd` (it is the same amount), computed with rationals.
+    A rate that does not divide into whole picodollars is rounded half up on the
+    total of the call, never per token.
+    """
+    price = PRICES.get(normalize(model))
+    if price is None:
+        return None
+    if not on_date:
+        from datetime import date
+
+        on_date = date.today().isoformat()
+    rate_in, rate_out = price.rates(on_date)
+    write_1h = max(0, min(cache_write_1h_tokens, cache_write_tokens))
+    write_5m = cache_write_tokens - write_1h
+    total = (
+        input_tokens * _pico_per_token(rate_in)
+        + output_tokens * _pico_per_token(rate_out)
+        + write_5m * _pico_per_token(rate_in, CACHE_WRITE_5M_MULTIPLIER)
+        + write_1h * _pico_per_token(rate_in, CACHE_WRITE_1H_MULTIPLIER)
+        + cache_read_tokens * _pico_per_token(rate_in, price.cache_read_multiplier)
+    )
+    return int(total) if total.denominator == 1 else int(total + Fraction(1, 2))
+
+
+def usd_to_pico(text: str) -> int:
+    """Parses a dollar amount typed by the user ("25", "0.50", "$1,200.75").
+
+    Raises ValueError for anything that is not an amount from zero to
+    `MAX_TYPED_USD` with at most twelve decimals.
+    """
+    cleaned = str(text).strip().replace("$", "").replace(",", "").strip()
+    try:
+        amount = Decimal(cleaned)
+    except InvalidOperation:
+        raise ValueError(f"not a dollar amount: {text!r}") from None
+    # The ceiling is far above any real limit: it only stops a slip such as
+    # "1e400" from becoming a budget that can never be reached.
+    if not amount.is_finite() or not 0 <= amount <= MAX_TYPED_USD:
+        raise ValueError(f"not a dollar amount: {text!r}")
+    pico = amount * PICO_PER_USD
+    if pico != pico.to_integral_value():
+        raise ValueError(f"more precision than a picodollar: {text!r}")
+    return int(pico)
+
+
+def format_pico(value: int | None, lower_bound: bool = False) -> str:
+    """`format_cost` for an integer amount of picodollars."""
+    return format_cost(None if value is None else value / PICO_PER_USD, lower_bound)
 
 
 def format_usd(value: float | None) -> str:
