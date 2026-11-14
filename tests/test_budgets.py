@@ -26,7 +26,13 @@ needs_tzset = pytest.mark.skipif(not hasattr(time, "tzset"), reason="the zone ca
 
 @pytest.fixture
 def zone(monkeypatch):
-    """Switches the process time zone for one test and restores it afterwards."""
+    """Switches the process time zone for one test and restores it afterwards.
+
+    Where the zone cannot be switched (Windows has no `tzset`), a test that
+    asks for this fixture is skipped instead of failing on the call.
+    """
+    if not hasattr(time, "tzset"):
+        pytest.skip("the zone cannot be switched here")
     def switch(name: str) -> None:
         monkeypatch.setenv("TZ", name)
         time.tzset()
@@ -113,7 +119,10 @@ def test_an_unreadable_stored_row_is_skipped_and_counted(store):
     assert load_budgets(store) == ([good], 4)
 
 
-def test_saving_again_replaces_the_definition_and_keeps_its_place(store):
+def test_saving_again_replaces_the_definition_and_keeps_its_place(store, monkeypatch):
+    """Also when both were created in the same instant, as happens with a
+    coarse clock: the list keeps the order they were added in."""
+    monkeypatch.setattr("tokenmeter.store.time.time", lambda: 1_700_000_000.0)
     first, second = budget(name="first"), budget(name="second")
     save_budget(store, first)
     save_budget(store, second)
