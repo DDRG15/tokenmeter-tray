@@ -295,10 +295,12 @@ def test_the_collapsed_window_shows_session_week_month_and_quality(tmp_path):
     app.store.add_event(UsageEvent(ts=time.time() - 60, provider="anthropic", model="claude-opus-5",
                                    input_tokens=50_000, output_tokens=0, dedupe_key="a",
                                    billing="subscription"))
-    app.weekly.set_reset_in(2 * 86400)
+    # Two days and a half hour: the text is "2d 0h" whether the clock moved a
+    # millisecond or a few seconds since the reset was set.
+    app.weekly.set_reset_in(2 * 86400 + 1800)
     lines = compact_lines(*compact_state(app))
     assert lines[0].startswith("Claude session: 50% · 04:5") and lines[0].endswith("· estimated")
-    assert lines[1].startswith("Claude week: ") and "resets in 1d 23h" in lines[1]
+    assert lines[1].startswith("Claude week: ") and "resets in 2d 0h" in lines[1]
     assert lines[2].endswith(": 50,000 tokens in 1 calls · $0.25 API equivalent")
     assert lines[3] == "Data quality: the session reset is estimated"
     assert len(lines) == 4
