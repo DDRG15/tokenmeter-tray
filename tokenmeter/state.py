@@ -3,12 +3,33 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from . import budgets
 from .collectors.proxy import last_request_ts, proxy_footer
 
 STALE_CALIBRATION_DAYS = 14
+# The shells tick every second. A budget adds up a whole day, week or month, so
+# it is evaluated at this pace instead: a notice a few seconds late costs
+# nothing, and a month of calls summed every second does.
+BUDGET_CHECK_SECONDS = 15.0
 
 
 class RuntimeState:
+    _budgets_checked_at = 0.0
+
+    def budget_statuses(self, now: float | None = None):
+        """(status of every personal budget, number of unreadable definitions)."""
+        return budgets.evaluate_all(self.store, now)
+
+    def due_budget_alerts(self, now: float | None = None) -> list:
+        """Budget notices owed since the last check. Empty on almost every tick."""
+        now = time.time() if now is None else now
+        if now - self._budgets_checked_at < BUDGET_CHECK_SECONDS:
+            return []
+        self._budgets_checked_at = now
+        statuses, _invalid = self.budget_statuses(now)
+        alerts = (budgets.due_alert(self.store, status) for status in statuses)
+        return [alert for alert in alerts if alert is not None]
+
     def snapshot(self):
         return self.session.snapshot()
 

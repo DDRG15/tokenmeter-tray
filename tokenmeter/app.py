@@ -193,6 +193,8 @@ class App(RuntimeState):
             if self.config.alerts_enabled:
                 for alert in self.alerts.due(snapshot):
                     self.tray.notify(alert.title, alert.message)
+                for alert in self.due_budget_alerts():
+                    self.tray.notify(alert.title, alert.message)
         except Exception:
             log.exception("failure in the main loop")
         finally:
