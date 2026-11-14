@@ -37,6 +37,7 @@ def source_files(root=ROOT):
         'tokenmeter/assets/tokenmeter.png',
         'tokenmeter/backups.py',
         'tokenmeter/billing.py',
+        'tokenmeter/budget_query.py',
         'tokenmeter/budgets.py',
         'tokenmeter/calibration.py',
         'tokenmeter/collectors/__init__.py',

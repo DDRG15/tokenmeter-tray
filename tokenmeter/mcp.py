@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from . import __version__
+from .budget_query import BudgetQuery
 from .collectors.codex import default_codex_root
+from .config import Config, data_dir
 from .usage_query import UsageQuery
 
 
-def build_server(query: UsageQuery):
+def build_server(query: UsageQuery, budget_query: BudgetQuery | None = None):
     # Optional dependency: desktop users and --help do not need the MCP SDK.
     from mcp.server import MCPServer
     from mcp.types import ToolAnnotations
@@ -47,6 +49,17 @@ def build_server(query: UsageQuery):
         """Check local source availability and read errors without exposing source paths."""
         return query.status()
 
+    if budget_query is not None:
+        @server.tool(annotations=readonly, structured_output=True)
+        def get_budget_status(
+            budget_id: Annotated[str, Field(max_length=32, pattern=r"^[A-Za-z0-9_-]*$")] = "",
+        ) -> dict[str, Any]:
+            """Personal budgets from the desktop app's database, with the current period of each.
+
+            An amount with causes is a minimum, not what is left. `available` false
+            means the database could not be read, never that nothing was used."""
+            return budget_query.status(budget_id)
+
     @server.resource("tokenmeter://interface")
     def interface_info() -> str:
         """Where to find the desktop UI; reading this does not launch a window."""
@@ -68,8 +81,11 @@ def main(argv=None):
         parser.error("The MCP server in this branch is supported on Linux only")
     query = UsageQuery(None if args.no_claude else args.claude_root.expanduser().resolve(),
                        None if args.no_codex else args.codex_root.expanduser().resolve())
+    # Paths only: neither function creates a folder, and the database is opened
+    # read-only on each call.
+    budget_query = BudgetQuery(data_dir() / "usage.db", Config.path())
     try:
-        server = build_server(query)
+        server = build_server(query, budget_query)
     except ImportError:
         parser.exit(2, "MCP dependencies missing: install requirements-mcp.txt in your environment.\n")
     try:

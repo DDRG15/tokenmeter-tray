@@ -71,10 +71,11 @@ It uses the standard MCP protocol over stdio and does not depend on either
 desktop UI. Use a separate `tokenmeter-linux-mcp` environment and a
 `tokenmeter-linux` client registration to keep it distinct from other setups.
 
-MCP provides `get_usage_summary`, `get_usage_history` and `get_collector_status`.
-It scans usage files into an in-memory database for each query, leaving the
-installed desktop database untouched. It does not read credentials, open a GUI,
-listen on HTTP or install a service. Install its pinned dependencies in a
+MCP provides `get_usage_summary`, `get_usage_history` and `get_collector_status`,
+which scan usage files into an in-memory database for each query, and
+`get_budget_status`, which reads the desktop app's database read-only so its
+figures match the window. No tool changes the installed desktop database. The
+server does not read credentials, open a GUI, listen on HTTP or install a service. Install its pinned dependencies in a
 separate environment: the desktop and MCP lockfiles must not be combined.
 
 ## Requirements

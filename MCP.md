@@ -18,15 +18,42 @@ MCP protocol and is independent of GTK, Tk and WebView2.
 | `get_usage_summary` | Normalized tokens/cache, models and API-equivalent estimates | `hours` (1–2160, default 5), optional `provider`, `source` |
 | `get_usage_history` | Daily usage with unknown/partial coverage | `days` (7, 30, 90), `basis` (`io` or `all`), optional filters |
 | `get_collector_status` | Source availability, record/file counts, undated-record counts and read errors | none |
+| `get_budget_status` | Your personal budgets with the current period of each, read from the desktop app's database | optional `budget_id` |
 
 Provider filters: empty, `anthropic`, `openai`. Source filters: empty,
 `transcript` (Claude Code), `codex`. Tools cannot change source paths or settings,
-restore files, delete records or launch programs. All three advertise read-only
+restore files, delete records or launch programs. All four advertise read-only
 annotations and return both JSON text and structured data.
 
-Each query scans local usage files into an in-memory SQLite database, performs
+### Budgets
+
+`get_budget_status` is the one tool that reads the desktop app's database, so its
+figures are the ones the desktop window shows, including calls only the proxy
+recorded. It opens the database read-only on each call and never changes it: no
+schema upgrade, no configuration saved, and no notification marked as sent
+(asking does not use up a notice the desktop app still owes). SQLite itself may
+create or update the `-shm` and an empty `-wal` next to the file, as any reader of
+such a database does.
+
+Each budget carries its limit, the known amount, the period's start and end, the
+state (`below`, `warning`, `danger`, `exceeded`) and the thresholds crossed.
+Amounts are strings (`known`, `limit`, in tokens or picodollars, 1e-12 USD) with a
+formatted `known_text`/`limit_text`. When `causes` is not empty the amount is a
+**minimum**: `percent_exact` is `null`, `percent_min` is what is proven, and
+`remaining_max` is an upper bound, not what is left. `cause_lines` says why.
+
+`available: false` means the database could not be read, never that nothing was
+used; `reason` is `no_desktop_database`, `database_not_readable` or
+`desktop_database_too_old`. `seconds_since_last_recorded_call` tells how fresh the
+picture is: with the desktop app closed, nothing new is recorded. Budget names and
+scopes are returned only when they look like names; anything else becomes
+`unrecognized`.
+
+### Usage
+
+The three usage tools scan local usage files into an in-memory SQLite database, performs
 aggregation with the existing parsers/deduplication and closes that database.
-It does not read or modify an installed TokenMeter database. It does not poll
+They do not read or modify an installed TokenMeter database. It does not poll
 in the background or include proxy-only calls. It reads usage records, not web
 conversations. A gap without usage records is unknown, not measured zero.
 Queries run one at a time. A summary or history query skips files not modified

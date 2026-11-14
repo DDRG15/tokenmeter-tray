@@ -77,7 +77,11 @@ def test_real_stdio_session_exits_when_client_disconnects(usage_sources, tmp_pat
         with (tmp_path / "server.log").open("w") as errlog:
             async with sdk.Client(sdk.stdio_client(parameters, errlog=errlog), mode=mode) as client:
                 assert client.server_info.name == "TokenMeter Linux"
-                assert len((await client.list_tools()).tools) == 3
+                assert len((await client.list_tools()).tools) == 4
+                # No desktop database in this home: unavailable, and asking does
+                # not create the folder (asserted below).
+                status = await client.call_tool("get_budget_status", {})
+                assert status.structured_content["reason"] == "no_desktop_database"
                 result = await client.call_tool("get_usage_summary", {"source": "codex"})
                 assert not result.is_error
                 assert result.structured_content["totals"]["all_tokens"] == 1100
@@ -128,3 +132,51 @@ def test_other_platforms_are_rejected_before_scanning_or_building_server(tmp_pat
     assert exc.value.code == 2
     assert "Linux only" in capsys.readouterr().err
     assert not list(tmp_path.iterdir())
+
+
+def test_budget_status_is_offered_and_answers_from_the_desktop_database(usage_sources, tmp_path):
+    from tokenmeter.budget_query import BudgetQuery
+    from tokenmeter.budgets import Budget, save_budget
+    from tokenmeter.store import Store
+
+    query, _, _, _ = usage_sources
+    store = Store(tmp_path / "desktop" / "usage.db")
+    budget = Budget.create(name="Daily cap", metric="tokens", period="day", limit=1000)
+    save_budget(store, budget)
+    budgets_query = BudgetQuery(tmp_path / "desktop" / "usage.db")
+
+    async def exercise():
+        async with sdk.Client(build_server(query, budgets_query), raise_exceptions=True) as client:
+            tools = {t.name: t for t in (await client.list_tools()).tools}
+            assert set(tools) == {"get_usage_summary", "get_usage_history", "get_collector_status",
+                                  "get_budget_status"}
+            assert tools["get_budget_status"].annotations.read_only_hint
+            result = await client.call_tool("get_budget_status", {})
+            assert not result.is_error
+            data = result.structured_content
+            assert data["available"] is True and data["data_source"] == "desktop_store"
+            assert [(b["id"], b["name"], b["known"]) for b in data["budgets"]] == [
+                (budget.id, "Daily cap", "0")]
+            one = await client.call_tool("get_budget_status", {"budget_id": budget.id})
+            assert len(one.structured_content["budgets"]) == 1
+            for bad in ("../../etc/passwd", "x" * 33, "a b"):
+                assert (await client.call_tool("get_budget_status", {"budget_id": bad})).is_error
+    try:
+        asyncio.run(asyncio.wait_for(exercise(), timeout=15))
+    finally:
+        store.close()
+
+
+def test_budget_status_without_a_desktop_database_is_unavailable_not_zero(usage_sources, tmp_path):
+    from tokenmeter.budget_query import BudgetQuery
+
+    query, _, _, _ = usage_sources
+
+    async def exercise():
+        server = build_server(query, BudgetQuery(tmp_path / "absent" / "usage.db"))
+        async with sdk.Client(server, raise_exceptions=True) as client:
+            data = (await client.call_tool("get_budget_status", {})).structured_content
+            assert (data["available"], data["reason"], data["budgets"]) == (
+                False, "no_desktop_database", [])
+    asyncio.run(asyncio.wait_for(exercise(), timeout=15))
+    assert not (tmp_path / "absent").exists()

@@ -76,7 +76,7 @@ jobs:
       - name: Dependency consistency
         run: python -m pip check
       - name: MCP protocol, queries and source readers
-        run: python -m pytest tests/test_usage_query.py tests/test_mcp.py tests/test_codex.py tests/test_transcripts.py tests/test_store_dedupe.py -q -p no:cacheprovider
+        run: python -m pytest tests/test_usage_query.py tests/test_mcp.py tests/test_codex.py tests/test_transcripts.py tests/test_store_dedupe.py tests/test_budget_query.py -q -p no:cacheprovider
 
   linux-ui:
     # Generic GTK integration in a private virtual display; Cinnamon is also
