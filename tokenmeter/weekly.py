@@ -16,10 +16,18 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
+from . import official_limits
 from .config import Config
 from .store import Store, Totals
 
 STATE_WEEKLY_RESET = "weekly_reset_ts"
+# When the user set the reset by hand. A reset reported later by Claude Code
+# replaces it, and a later manual one replaces Claude Code's.
+STATE_WEEKLY_RESET_SET_AT = "weekly_reset_set_at"
+
+SOURCE_CLAUDE_CODE = "claude_code"
+SOURCE_CLAUDE_AI = "claude_ai"
+SOURCE_NONE = "none"
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
@@ -74,21 +82,48 @@ class WeeklyTracker:
 
     # -- reset moment --------------------------------------------------
 
-    def raw_reset_ts(self) -> float | None:
+    def _manual_reset(self) -> tuple[float, float] | None:
+        """(reset, when it was set) as entered by the user, if any."""
         raw = self._store.get_state(STATE_WEEKLY_RESET)
         try:
-            return float(raw) if raw else None
+            reset = float(raw) if raw else None
         except ValueError:
+            reset = None
+        if reset is None:
             return None
+        try:
+            set_at = float(self._store.get_state(STATE_WEEKLY_RESET_SET_AT) or 0.0)
+        except ValueError:
+            set_at = 0.0
+        return reset, set_at
+
+    def reset_and_source(self) -> tuple[float | None, str]:
+        """The cycle's reference reset and who reported it: the latest report wins.
+
+        A reset set before this was tracked has no date and counts as the
+        oldest, so the first notice from Claude Code replaces it.
+        """
+        manual = self._manual_reset()
+        notice = official_limits.latest(self._store, official_limits.SEVEN_DAY)
+        if notice is not None and (manual is None or notice.observed_at > manual[1]):
+            return notice.resets_at, SOURCE_CLAUDE_CODE
+        if manual is not None:
+            return manual[0], SOURCE_CLAUDE_AI
+        return None, SOURCE_NONE
+
+    def raw_reset_ts(self) -> float | None:
+        return self.reset_and_source()[0]
 
     def set_reset_in(self, seconds_from_now: float, now: float | None = None) -> float:
         """Sets the cycle from the "Resets in …" the web shows."""
         now = time.time() if now is None else now
-        return self.set_reset_at(now + max(0.0, seconds_from_now))
+        return self.set_reset_at(now + max(0.0, seconds_from_now), now)
 
-    def set_reset_at(self, reset_ts: float) -> float:
+    def set_reset_at(self, reset_ts: float, now: float | None = None) -> float:
         """Sets the cycle from the exact instant ("Resets Thursday 3:00 AM")."""
         self._store.set_state(STATE_WEEKLY_RESET, repr(reset_ts))
+        self._store.set_state(STATE_WEEKLY_RESET_SET_AT,
+                              repr(time.time() if now is None else now))
         return reset_ts
 
     def next_reset(self, now: float | None = None) -> float | None:
