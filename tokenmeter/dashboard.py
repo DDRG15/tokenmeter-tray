@@ -303,6 +303,12 @@ def build_codex(store, cfg, now: float) -> dict | None:
     }
 
 
+def build_budgets(app, now: float | None = None) -> dict:
+    """Every personal budget with its current period, as plain data."""
+    statuses, invalid = app.budget_statuses(now)
+    return {"budgets": [status.as_dict() for status in statuses], "invalid": invalid}
+
+
 SESSION_HISTORY_LIMIT = 40
 
 

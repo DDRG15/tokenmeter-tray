@@ -22,12 +22,13 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .models import BILLING_LOCAL
-from .pricing import cost_pico, format_pico, is_lower_bound
+from .pricing import PICO_PER_USD, cost_pico, format_pico, is_lower_bound, usd_to_pico
 
 log = logging.getLogger(__name__)
 
@@ -204,6 +205,88 @@ def save_budget(store, budget: Budget) -> None:
     store.save_budget_row(budget.to_row())
 
 
+# -- the editor's form --------------------------------------------------------
+
+FORM_FIELDS = ("name", "metric", "token_basis", "period", "scope_kind", "scope_provider",
+               "scope_model", "limit", "thresholds")
+_TOKEN_SUFFIXES = {"k": 1_000, "m": 1_000_000}
+
+
+def parse_token_limit(text: str) -> int:
+    """A token limit as typed: "500000", "500,000", "500k", "2.5M".
+
+    Raises ValueError unless it is a whole number of tokens above zero.
+    """
+    cleaned = str(text).strip().lower().replace(",", "").replace("_", "").replace(" ", "")
+    factor = 1
+    if cleaned[-1:] in _TOKEN_SUFFIXES:
+        factor, cleaned = _TOKEN_SUFFIXES[cleaned[-1]], cleaned[:-1]
+    try:
+        amount = Decimal(cleaned) * factor
+    except InvalidOperation:
+        raise ValueError(f"not a number of tokens: {text!r}") from None
+    if not amount.is_finite() or amount != amount.to_integral_value() or not 0 < amount <= 10 ** 15:
+        raise ValueError(f"not a number of tokens: {text!r}")
+    return int(amount)
+
+
+def parse_thresholds(text: str) -> tuple[int, ...]:
+    """Percentages as typed: "60, 85, 100". Empty means no notices."""
+    parts = [p for p in str(text).replace("%", " ").replace(",", " ").split() if p]
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        raise ValueError("thresholds must be whole percentages, for example: 60, 85, 100") from None
+
+
+def budget_from_form(form: dict, existing: Budget | None = None) -> Budget:
+    """Builds a budget from the editor's text fields; raises ValueError with a
+    message for the user if any field does not make sense.
+
+    Editing keeps the id, the creation zone and whether it is enabled, so the
+    notices already given for the current period stay given.
+    """
+    metric = str(form.get("metric", "")).strip()
+    limit_text = str(form.get("limit", ""))
+    limit = usd_to_pico(limit_text) if metric == "money" else parse_token_limit(limit_text)
+    scope_kind = str(form.get("scope_kind", "all")).strip()
+    fields = {
+        "name": str(form.get("name", "")).strip(),
+        "metric": metric,
+        "token_basis": str(form.get("token_basis", "all")).strip() or "all",
+        "period": str(form.get("period", "")).strip(),
+        "scope_kind": scope_kind,
+        # Fields the chosen scope does not use are dropped, not kept hidden.
+        "scope_provider": str(form.get("scope_provider", "")).strip()
+        if scope_kind in ("provider", "model") else "",
+        "scope_model": str(form.get("scope_model", "")).strip() if scope_kind == "model" else "",
+        "limit": limit,
+        "thresholds": parse_thresholds(form.get("thresholds", "")),
+    }
+    if existing is not None:
+        return Budget(id=existing.id, timezone=existing.timezone, enabled=existing.enabled, **fields)
+    return Budget.create(**fields)
+
+
+def form_from_budget(budget: Budget | None = None) -> dict:
+    """The editor's fields for an existing budget, or the defaults for a new one."""
+    if budget is None:
+        return {"name": "", "metric": "money", "token_basis": "all", "period": "month",
+                "scope_kind": "all", "scope_provider": "", "scope_model": "", "limit": "",
+                "thresholds": ", ".join(str(t) for t in DEFAULT_THRESHOLDS)}
+    limit = (str(Decimal(budget.limit) / PICO_PER_USD) if budget.is_money else str(budget.limit))
+    if budget.is_money and "." in limit:
+        limit = limit.rstrip("0").rstrip(".")
+    return {"name": budget.name, "metric": budget.metric, "token_basis": budget.token_basis,
+            "period": budget.period, "scope_kind": budget.scope_kind,
+            "scope_provider": budget.scope_provider, "scope_model": budget.scope_model,
+            "limit": limit, "thresholds": ", ".join(str(t) for t in budget.thresholds)}
+
+
+def set_enabled(budget: Budget, enabled: bool) -> Budget:
+    return replace(budget, enabled=enabled)
+
+
 # -- periods ------------------------------------------------------------------
 
 
@@ -303,14 +386,30 @@ class BudgetStatus:
 
     def cause_lines(self) -> list[str]:
         """The causes in words, in a stable order."""
-        texts = {
-            CAUSE_UNPRICED: "{n} call(s) of a model without a verified price are not in the amount",
-            CAUSE_TIERED_PRICE: "{n} call(s) are priced at the base tier, which is a minimum",
-            CAUSE_MISSING_USAGE: "{n} call(s) were cut before their usage arrived",
-            CAUSE_HISTORY_TRUNCATED: "the period starts before the history that is kept",
-            CAUSE_TIMEZONE_CHANGED: "the system time zone changed since this budget was created",
-        }
-        return [texts[c].format(n=self.causes[c]) for c in texts if c in self.causes]
+        def calls(n: int) -> str:
+            return "1 call" if n == 1 else f"{n:,} calls"
+
+        def verb(n: int, one: str, many: str) -> str:
+            return one if n == 1 else many
+
+        lines = []
+        for cause, count in ((c, self.causes[c]) for c in (
+                CAUSE_UNPRICED, CAUSE_TIERED_PRICE, CAUSE_MISSING_USAGE,
+                CAUSE_HISTORY_TRUNCATED, CAUSE_TIMEZONE_CHANGED) if c in self.causes):
+            if cause == CAUSE_UNPRICED:
+                lines.append(f"{calls(count)} of a model without a verified price "
+                             f"{verb(count, 'is', 'are')} not in the amount")
+            elif cause == CAUSE_TIERED_PRICE:
+                lines.append(f"{calls(count)} {verb(count, 'is', 'are')} priced at the base "
+                             "tier, which is a minimum")
+            elif cause == CAUSE_MISSING_USAGE:
+                lines.append(f"{calls(count)} {verb(count, 'was', 'were')} cut before "
+                             f"{verb(count, 'its', 'their')} usage arrived")
+            elif cause == CAUSE_HISTORY_TRUNCATED:
+                lines.append("the period starts before the history that is kept")
+            else:
+                lines.append("the system time zone changed since this budget was created")
+        return lines
 
     def as_dict(self) -> dict:
         """Plain data for a UI or a tool. Amounts are strings: a month of

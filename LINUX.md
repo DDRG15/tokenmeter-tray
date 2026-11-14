@@ -68,7 +68,10 @@ Overview shows Claude session/weekly usage, provider/model tokens with each
 model's billing type, API-equivalent estimates and Codex's recorded limits. Percentages keep their own plan scope.
 History provides filters, a chart and 7/30/90-day table. Unknown days are marked
 as unknown, not zero. CSV/JSON exports use the selected filters and protect app
-files. Settings provides manual budget, calibration from claude.ai, weekly reset,
+files. Budgets lists your personal limits with what each one has used in its
+current day, week or month; an amount that may be missing something is shown as
+a minimum with its reason. Sessions lists past sessions and whether each window
+was reported by Claude Code, copied from claude.ai or estimated. Settings provides manual budget, calibration from claude.ai, weekly reset,
 cache basis, alerts and session reset without deleting history. Notifications
 use an existing desktop notification service and are recalled on exit.
 
