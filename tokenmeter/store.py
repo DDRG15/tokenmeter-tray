@@ -776,8 +776,10 @@ class Store:
     def budget_rows(self) -> list[dict]:
         """Stored budget definitions, oldest first. Validation is `budgets.py`'s job."""
         with self._lock:
+            # By rowid: the order they were added in. `created_ts` cannot break
+            # a tie between two budgets added within one tick of a coarse clock.
             return [dict(r) for r in self._conn.execute(
-                f"SELECT {','.join(BUDGET_COLUMNS)} FROM budgets ORDER BY created_ts, id")]
+                f"SELECT {','.join(BUDGET_COLUMNS)} FROM budgets ORDER BY rowid")]
 
     def save_budget_row(self, row: dict) -> None:
         """Inserts or replaces one definition. `created_ts` of an existing one is kept."""
@@ -787,10 +789,18 @@ class Store:
             existing = self._conn.execute(
                 "SELECT created_ts FROM budgets WHERE id=?", (data["id"],)).fetchone()
             data["created_ts"] = existing["created_ts"] if existing else now
-            self._conn.execute(
-                f"INSERT OR REPLACE INTO budgets ({','.join(BUDGET_COLUMNS)}) "
-                f"VALUES ({','.join('?' for _ in BUDGET_COLUMNS)})",
-                tuple(data[c] for c in BUDGET_COLUMNS))
+            if existing:
+                # UPDATE, not INSERT OR REPLACE: a replaced row gets a new rowid
+                # and would jump to the end of the list on every edit.
+                changed = [c for c in BUDGET_COLUMNS if c != "id"]
+                self._conn.execute(
+                    f"UPDATE budgets SET {','.join(c + '=?' for c in changed)} WHERE id=?",
+                    (*[data[c] for c in changed], data["id"]))
+            else:
+                self._conn.execute(
+                    f"INSERT INTO budgets ({','.join(BUDGET_COLUMNS)}) "
+                    f"VALUES ({','.join('?' for _ in BUDGET_COLUMNS)})",
+                    tuple(data[c] for c in BUDGET_COLUMNS))
             self._conn.commit()
 
     def delete_budget(self, budget_id: str) -> bool:
