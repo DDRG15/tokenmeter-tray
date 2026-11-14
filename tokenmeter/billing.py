@@ -187,6 +187,84 @@ class CachedBilling:
             return self._value
 
 
+STATE_AUTH_TIMELINE = "claude_auth_timeline"
+# Longest history of login changes kept. Older ones fall off the start, where
+# the oldest remaining entry stands for everything before it.
+AUTH_TIMELINE_MAX = 60
+# The login in force is re-stamped at most this often; it bounds how long after
+# a change a call can still be attributed to the previous login.
+AUTH_SEEN_EVERY_S = 30.0
+
+
+class AuthTimeline:
+    """Which Claude Code login was in force when, as far as this app saw it.
+
+    A transcript line does not say how its call was paid, so the reader used
+    the login on disk at the moment it read the line. A call made under a
+    subscription and read after switching to an API key came out as paid API,
+    and the other way round. Each change is recorded here with the time it was
+    seen, and a call gets the login in force at the call's own time.
+
+    Each entry is the span over which one login was observed, from the first
+    time it was seen to the last. Between the last sighting of one login and
+    the first of the next, nobody was looking (the app was closed, or between
+    two checks), so a call in that gap is unknown rather than guessed.
+    """
+
+    def __init__(self, store, source) -> None:
+        self._store = store
+        self._source = source
+
+    def _load(self) -> list[list]:
+        raw = self._store.get_state(STATE_AUTH_TIMELINE)
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return []
+        entries = []
+        for item in data if isinstance(data, list) else []:
+            if (isinstance(item, list) and len(item) == 4
+                    and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in item[:2])
+                    and item[0] <= item[1] and item[2] in BILLINGS and isinstance(item[3], str)):
+                entries.append([float(item[0]), float(item[1]), item[2], item[3]])
+        entries.sort(key=lambda e: e[0])
+        return entries
+
+    def observe(self, now: float | None = None) -> Billing:
+        """Records the login in force now. Returns it."""
+        now = time.time() if now is None else now
+        current = self._source.get()
+        entries = self._load()
+        last = entries[-1] if entries else None
+        if last is not None and (last[2], last[3]) == tuple(current):
+            if now - last[1] < AUTH_SEEN_EVERY_S:
+                return current  # nothing to write on almost every scan
+            last[1] = max(last[1], now)
+        else:
+            entries.append([now, now, current[0], current[1]])
+        self._store.set_state(STATE_AUTH_TIMELINE, json.dumps(entries[-AUTH_TIMELINE_MAX:]))
+        return current
+
+    def at(self, ts: float) -> Billing:
+        """The login in force at `ts`.
+
+        Before the first sighting, the first login seen stands in: it is the
+        same assumption any backfill makes, and the best available. After the
+        last sighting, the latest login does.
+        """
+        entries = self._load()
+        if not entries:
+            return UNKNOWN
+        for index, (first, last, kind, plan) in enumerate(entries):
+            if ts <= last or index == len(entries) - 1:
+                if index > 0 and ts < first:
+                    return UNKNOWN  # in the gap between two logins
+                return (kind, plan)
+        return UNKNOWN
+
+
 def apply_override(provider: str, billing: Billing, overrides: dict | None) -> Billing:
     """The manual per-provider setting only fills what could not be detected."""
     if billing[0] != BILLING_UNKNOWN or not overrides:
