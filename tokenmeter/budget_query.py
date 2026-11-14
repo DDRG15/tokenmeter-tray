@@ -53,7 +53,10 @@ def _public(status: budgets.BudgetStatus) -> dict:
     data["name"] = budget.name if _NAME.fullmatch(budget.name) else UNRECOGNIZED
     data["scope"] = _scope_text(budget)
     data["scope_kind"] = budget.scope_kind
-    data["timezone"] = budget.timezone if _IDENTIFIER.fullmatch(budget.timezone) else UNRECOGNIZED
+    # Zone names have spaces on Windows ("Coordinated Universal Time"), so they
+    # are checked like a name, not like an identifier. Empty means "not stored".
+    data["timezone"] = (budget.timezone if not budget.timezone or _NAME.fullmatch(budget.timezone)
+                        else UNRECOGNIZED)
     # The summary repeats nothing free-form: amounts and percentages only.
     return data
 
